@@ -2,8 +2,11 @@ import super::shared::*;
 
 fn main(
     BID_VERIFIER: BidVerifier,
+    TIMINGS: Timings,
+    BUYERS_PREMIUM_BPS: Int,
     Truth: AuctionStateTruth,
     bid: Bid,
+    grace: Bool, // whether to use the grace period
 ) -> Output {
     let old_bid = inline if Truth.state.winning_bid.amount == 0 {
         nil
@@ -14,7 +17,35 @@ fn main(
     assert BID_VERIFIER(old_bid, bid);
 
     Output {
-        new_truth: Truth,
-        conditions: [],
+        new_truth: AuctionStateTruth {
+            state: AuctionState {
+                reserve_amount: bid.amount + calculate_bps_payment(bid.amount, BUYERS_PREMIUM_BPS),
+                winning_bid: bid,
+            },
+            ephemeral_state: Truth.ephemeral_state,
+        },
+        conditions: [
+            // We need to make sure we're either before the grace period ends or before the auction ends
+            inline if grace & (TIMINGS.grace_period > 0) {
+                AssertBeforeSecondsRelative { seconds: TIMINGS.grace_period }
+            } else {
+                AssertBeforeSecondsAbsolute { seconds: TIMINGS.end_time }
+            },
+
+            // If there is a previous bid, we need to refund it in full
+            ...inline if Truth.state.winning_bid.amount == 0 {
+                []
+            } else {
+                [ReserveCondition {
+                    condition: CreateCoin {
+                        puzzle_hash: Truth.state.winning_bid.puzzle_hash,
+                        amount: Truth.state.reserve_amount,
+                        memos: Memos {
+                            value: [Truth.state.winning_bid.puzzle_hash],
+                        },
+                    }
+                }]
+            },
+        ],
     }
 }

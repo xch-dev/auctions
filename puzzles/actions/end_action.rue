@@ -1,0 +1,85 @@
+import super::shared::*;
+
+struct Payments {
+    buyers_premium: BpsPayment,
+    commission: BpsPayment,
+    ...payout_puzzle_hash: Bytes32,
+}
+
+fn main(
+    TIMINGS: Timings,
+    PAYMENTS: Payments,
+    NFT_COIN_ID: Bytes32,
+    Truth: AuctionStateTruth,
+) -> Output {
+    let commission = calculate_bps_payment(Truth.state.winning_bid.amount, PAYMENTS.commission.bps);
+
+    Output {
+        new_truth: AuctionStateTruth {
+            state: AuctionState {
+                reserve_amount: 0,
+                winning_bid: Truth.state.winning_bid,
+            },
+            ephemeral_state: Truth.ephemeral_state,
+        },
+        conditions: [
+            // Pay the buyer's premium
+            ReserveCondition {
+                condition: CreateCoin {
+                    puzzle_hash: PAYMENTS.buyers_premium.puzzle_hash,
+                    amount: calculate_bps_payment(Truth.state.winning_bid.amount, PAYMENTS.buyers_premium.bps),
+                    memos: Memos {
+                        value: [PAYMENTS.buyers_premium.puzzle_hash],
+                    }
+                },
+            },
+
+            // Pay the commission
+            ReserveCondition {
+                condition: CreateCoin {
+                    puzzle_hash: PAYMENTS.commission.puzzle_hash,
+                    amount: commission,
+                    memos: Memos {
+                        value: [PAYMENTS.commission.puzzle_hash],
+                    }
+                },
+            },
+
+            // Pay the auctioneer
+            ReserveCondition {
+                condition: CreateCoin {
+                    puzzle_hash: PAYMENTS.payout_puzzle_hash,
+                    amount: Truth.state.winning_bid.amount - commission,
+                    memos: Memos {
+                        value: [PAYMENTS.payout_puzzle_hash],
+                    }
+                }
+            },
+
+            // Authorize the NFT to be sent to the winning bidder
+            SendMessage {
+                mode: SENDER_PUZZLE | RECEIVER_COIN,
+                receiver: [NFT_COIN_ID],
+                message: tree_hash((1, [
+                    CreateCoin {
+                        puzzle_hash: Truth.state.winning_bid.puzzle_hash,
+                        amount: 1,
+                        memos: Memos {
+                            value: [Truth.state.winning_bid.puzzle_hash],
+                        },
+                    },
+                ])),
+            },
+
+            // We always need to make sure the auction is over
+            AssertSecondsAbsolute { seconds: TIMINGS.end_time },
+
+            // If there is a grace period, we need to make sure it's over too
+            ...inline if TIMINGS.grace_period > 0 {
+                [AssertSecondsRelative { seconds: TIMINGS.grace_period }]
+            } else {
+                nil
+            },
+        ],
+    }
+}

@@ -6,17 +6,37 @@ export struct AuctionStateTruth {
 export struct EphemeralState {}
 
 export struct AuctionState {
-    winning_bid: Bid,
+    reserve_amount: Int,
+    ...winning_bid: Bid,
 }
 
 export struct Output {
     new_truth: AuctionStateTruth,
-    ...conditions: List<Condition>,
+    ...conditions: List<Condition | ReserveCondition>,
 }
+
+export struct ReserveCondition {
+    opcode = -42,
+    ...condition: Condition,
+}
+
+export type BidVerifier = fn(old: Bid | nil, new: Bid) -> Bool;
 
 export struct Bid {
     amount: Int,
     ...puzzle_hash: Bytes32,
 }
 
-export type BidVerifier = fn(old: Bid | nil, new: Bid) -> Bool;
+export struct Timings {
+    end_time: Int,
+    ...grace_period: Int,
+}
+
+export struct BpsPayment {
+    bps: Int,
+    ...puzzle_hash: Bytes32,
+}
+
+export inline fn calculate_bps_payment(bid_amount: Int, bps: Int) -> Int {
+    bid_amount * bps / 10000
+}
