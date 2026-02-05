@@ -1,0 +1,22 @@
+export struct AuctionStateTruth {
+    ephemeral_state: EphemeralState,
+    ...state: AuctionState,
+}
+
+export struct EphemeralState {}
+
+export struct AuctionState {
+    winning_bid: Bid,
+}
+
+export struct Output {
+    new_truth: AuctionStateTruth,
+    ...conditions: List<Condition>,
+}
+
+export struct Bid {
+    amount: Int,
+    ...puzzle_hash: Bytes32,
+}
+
+export type BidVerifier = fn(old: Bid | nil, new: Bid) -> Bool;
