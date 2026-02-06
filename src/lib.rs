@@ -1,11 +1,17 @@
 mod actions;
 mod auction;
 mod bid_verifiers;
+mod info;
+mod launcher;
+mod p2;
 mod types;
 
 pub use actions::*;
 pub use auction::*;
 pub use bid_verifiers::*;
+pub use info::*;
+pub use launcher::*;
+pub use p2::*;
 pub use types::*;
 
 #[cfg(test)]
