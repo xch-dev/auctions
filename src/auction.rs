@@ -8,11 +8,20 @@ use chia_wallet_sdk::{
     },
 };
 
-use crate::{AuctionInfo, BidActionArgs, BidActionSolution, EndActionArgs, calculate_bps_payment};
+use crate::{
+    AuctionInfo, AuctionState, BidActionArgs, BidActionSolution, EndActionArgs,
+    calculate_bps_payment,
+};
 
 pub type Auction = Singleton<AuctionInfo>;
 
 pub trait AuctionExt: Sized {
+    fn child_state(
+        &self,
+        ctx: &mut SpendContext,
+        action_spends: &[Spend],
+    ) -> Result<AuctionState, DriverError>;
+
     fn spend(
         self,
         ctx: &mut SpendContext,
@@ -22,6 +31,34 @@ pub trait AuctionExt: Sized {
 }
 
 impl AuctionExt for Auction {
+    fn child_state(
+        &self,
+        ctx: &mut SpendContext,
+        action_spends: &[Spend],
+    ) -> Result<AuctionState, DriverError> {
+        let mut state = self.info.state;
+
+        for action_spend in action_spends {
+            let puzzle = Puzzle::parse(ctx, action_spend.puzzle);
+
+            if puzzle.mod_hash() == BidActionArgs::<NodePtr>::mod_hash() {
+                let solution = ctx.extract::<BidActionSolution>(action_spend.solution)?;
+
+                state.winning_bid = solution.bid;
+                state.reserve_amount = solution.bid.amount
+                    + calculate_bps_payment(
+                        solution.bid.amount,
+                        self.info.settings.payments.buyers_premium.bps,
+                    );
+            } else if puzzle.mod_hash() == EndActionArgs::mod_hash() {
+                state.reserve_amount = 0;
+                break;
+            }
+        }
+
+        Ok(state)
+    }
+
     fn spend(
         self,
         ctx: &mut SpendContext,
@@ -58,25 +95,7 @@ impl AuctionExt for Auction {
             reserve_parent_id: reserve_coin_id,
         })?;
 
-        let mut state = self.info.state;
-
-        for action_spend in &action_spends {
-            let puzzle = Puzzle::parse(ctx, action_spend.puzzle);
-
-            if puzzle.mod_hash() == BidActionArgs::<NodePtr>::mod_hash() {
-                let solution = ctx.extract::<BidActionSolution>(action_spend.solution)?;
-
-                state.winning_bid = solution.bid;
-                state.reserve_amount = solution.bid.amount
-                    + calculate_bps_payment(
-                        solution.bid.amount,
-                        self.info.settings.payments.buyers_premium.bps,
-                    );
-            } else if puzzle.mod_hash() == EndActionArgs::mod_hash() {
-                state.reserve_amount = 0;
-                break;
-            }
-        }
+        let state = self.child_state(ctx, &action_spends)?;
 
         let inner_spend = action_layer.construct_spend(
             ctx,
