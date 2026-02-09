@@ -12,7 +12,9 @@ fn main(
     NFT_COIN_ID: Bytes32,
     Truth: AuctionStateTruth,
 ) -> Output {
+    let buyers_premium = calculate_bps_payment(Truth.state.winning_bid.amount, PAYMENTS.buyers_premium.bps);
     let commission = calculate_bps_payment(Truth.state.winning_bid.amount, PAYMENTS.commission.bps);
+    let payout = Truth.state.winning_bid.amount - commission;
 
     Output {
         new_truth: AuctionStateTruth {
@@ -24,36 +26,48 @@ fn main(
         },
         conditions: [
             // Pay the buyer's premium
-            ReserveCondition {
-                condition: CreateCoin {
-                    puzzle_hash: PAYMENTS.buyers_premium.puzzle_hash,
-                    amount: calculate_bps_payment(Truth.state.winning_bid.amount, PAYMENTS.buyers_premium.bps),
-                    memos: Memos {
-                        value: [PAYMENTS.buyers_premium.puzzle_hash],
-                    }
-                },
+            inline if buyers_premium > 0 {
+                ReserveCondition {
+                    condition: CreateCoin {
+                        puzzle_hash: PAYMENTS.buyers_premium.puzzle_hash,
+                        amount: buyers_premium,
+                        memos: Memos {
+                            value: [PAYMENTS.buyers_premium.puzzle_hash],
+                        }
+                    },
+                }
+            } else {
+                Remark {}
             },
 
             // Pay the commission
-            ReserveCondition {
-                condition: CreateCoin {
-                    puzzle_hash: PAYMENTS.commission.puzzle_hash,
-                    amount: commission,
-                    memos: Memos {
-                        value: [PAYMENTS.commission.puzzle_hash],
-                    }
-                },
+            inline if commission > 0 {
+                    ReserveCondition {
+                    condition: CreateCoin {
+                        puzzle_hash: PAYMENTS.commission.puzzle_hash,
+                        amount: commission,
+                        memos: Memos {
+                            value: [PAYMENTS.commission.puzzle_hash],
+                        }
+                    },
+                }
+            } else {
+                Remark {}
             },
 
             // Pay the auctioneer
-            ReserveCondition {
-                condition: CreateCoin {
-                    puzzle_hash: PAYMENTS.payout_puzzle_hash,
-                    amount: Truth.state.winning_bid.amount - commission,
-                    memos: Memos {
-                        value: [PAYMENTS.payout_puzzle_hash],
+            inline if payout > 0 {
+                ReserveCondition {
+                    condition: CreateCoin {
+                        puzzle_hash: PAYMENTS.payout_puzzle_hash,
+                        amount: payout,
+                        memos: Memos {
+                            value: [PAYMENTS.payout_puzzle_hash],
+                        }
                     }
                 }
+            } else {
+                Remark {}
             },
 
             // Authorize the NFT to be sent to the winning bidder
@@ -73,6 +87,11 @@ fn main(
 
             // We always need to make sure the auction is over
             AssertSecondsAbsolute { seconds: TIMINGS.end_time },
+
+            // Announce the end of the auction
+            CreateCoinAnnouncement {
+                message: "$",
+            },
 
             // If there is a grace period, we need to make sure it's over too
             ...inline if TIMINGS.grace_period > 0 {

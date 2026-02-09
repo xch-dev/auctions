@@ -20,4 +20,4 @@ impl EndActionArgs {
     }
 }
 
-compile_rue!(EndActionArgs = END_ACTION, "puzzles/actions/end_action.rue");
+compile_rue!(debug EndActionArgs = END_ACTION, "puzzles/actions/end_action.rue");

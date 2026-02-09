@@ -66,19 +66,6 @@ pub struct AuctionSettings {
     pub payments: Payments,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ToClvm, FromClvm)]
-#[clvm(list)]
-pub enum AuctionAsset {
-    Xch,
-    Cat {
-        asset_id: Bytes32,
-    },
-    RevocableCat {
-        asset_id: Bytes32,
-        hidden_puzzle_hash: Bytes32,
-    },
-}
-
 #[apply_constants]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ToClvm, FromClvm)]
 #[clvm(list)]

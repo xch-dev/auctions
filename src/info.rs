@@ -7,82 +7,84 @@ use chia_wallet_sdk::{
 };
 
 use crate::{
-    AuctionAsset, AuctionSettings, AuctionState, BidActionArgs, EndActionArgs, FlatBidVerifierArgs,
-    auction_lock_p2_puzzle_hash,
+    AuctionReserve, AuctionSettings, AuctionState, BidActionArgs, EndActionArgs,
+    FlatBidVerifierArgs,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuctionInfo {
     pub launcher_id: Bytes32,
     pub settings: AuctionSettings,
-    pub asset: AuctionAsset,
     pub nft_coin_id: Bytes32,
     pub state: AuctionState,
+    pub reserve: AuctionReserve,
 }
 
 impl AuctionInfo {
     pub fn new(
         launcher_id: Bytes32,
         settings: AuctionSettings,
-        asset: AuctionAsset,
         nft_coin_id: Bytes32,
         state: AuctionState,
+        reserve: AuctionReserve,
     ) -> Self {
         Self {
             launcher_id,
             settings,
-            asset,
             nft_coin_id,
             state,
+            reserve,
         }
     }
 
-    pub fn bid_action(&self) -> BidActionArgs<FlatBidVerifierArgs> {
+    pub fn bid_action(&self, ctx: &mut SpendContext) -> Result<NodePtr, DriverError> {
+        let bid_verifier = ctx.curry(FlatBidVerifierArgs::new(
+            self.settings.minimum_bid,
+            self.settings.bid_increment,
+        ))?;
+
+        ctx.curry(BidActionArgs::new(
+            bid_verifier,
+            self.settings.timings,
+            self.settings.payments.buyers_premium.bps,
+        ))
+    }
+
+    pub fn bid_action_hash(&self) -> Bytes32 {
         BidActionArgs::new(
-            FlatBidVerifierArgs::new(self.settings.minimum_bid, self.settings.bid_increment),
+            FlatBidVerifierArgs::new(self.settings.minimum_bid, self.settings.bid_increment)
+                .curry_tree_hash(),
             self.settings.timings,
             self.settings.payments.buyers_premium.bps,
         )
+        .curry_tree_hash()
+        .into()
     }
 
-    pub fn end_action(&self) -> EndActionArgs {
+    pub fn end_action(&self, ctx: &mut SpendContext) -> Result<NodePtr, DriverError> {
+        ctx.curry(EndActionArgs::new(
+            self.settings.timings,
+            self.settings.payments,
+            self.nft_coin_id,
+        ))
+    }
+
+    pub fn end_action_hash(&self) -> Bytes32 {
         EndActionArgs::new(
             self.settings.timings,
             self.settings.payments,
             self.nft_coin_id,
         )
+        .curry_tree_hash()
+        .into()
     }
 
     pub fn merkle_leaves(&self) -> [Bytes32; 2] {
-        [
-            self.bid_action().curry_tree_hash().into(),
-            self.end_action().curry_tree_hash().into(),
-        ]
+        [self.bid_action_hash(), self.end_action_hash()]
     }
 
     pub fn merkle_tree(&self) -> MerkleTree {
         MerkleTree::new(&self.merkle_leaves())
-    }
-
-    pub fn locked_p2_puzzle_hash(&self) -> Bytes32 {
-        auction_lock_p2_puzzle_hash(self.launcher_id)
-    }
-
-    pub fn locked_full_puzzle_hash(&self) -> Bytes32 {
-        let p2_puzzle_hash = self.locked_p2_puzzle_hash();
-
-        match self.asset {
-            AuctionAsset::Xch => p2_puzzle_hash,
-            AuctionAsset::Cat { asset_id } => CatInfo::new(asset_id, None, p2_puzzle_hash)
-                .puzzle_hash()
-                .into(),
-            AuctionAsset::RevocableCat {
-                asset_id,
-                hidden_puzzle_hash,
-            } => CatInfo::new(asset_id, Some(hidden_puzzle_hash), p2_puzzle_hash)
-                .puzzle_hash()
-                .into(),
-        }
     }
 }
 
@@ -94,8 +96,8 @@ impl SingletonInfo for AuctionInfo {
     fn inner_puzzle_hash(&self) -> TreeHash {
         ActionLayerArgs::curry_tree_hash(
             ReserveFinalizer2ndCurryArgs::curry_tree_hash(
-                self.locked_full_puzzle_hash(),
-                self.locked_p2_puzzle_hash(),
+                self.reserve.coin().puzzle_hash,
+                self.reserve.p2_puzzle_hash(),
                 RESERVE_FINALIZER_DEFAULT_RESERVE_AMOUNT_FROM_STATE_PROGRAM_HASH,
                 self.launcher_id,
             ),

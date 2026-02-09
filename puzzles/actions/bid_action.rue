@@ -1,12 +1,17 @@
 import super::shared::*;
 
+struct Solution {
+    bid: Bid,
+    // whether to use the grace period
+    grace: Bool,
+}
+
 fn main(
     BID_VERIFIER: BidVerifier,
     TIMINGS: Timings,
     BUYERS_PREMIUM_BPS: Int,
     Truth: AuctionStateTruth,
-    bid: Bid,
-    grace: Bool, // whether to use the grace period
+    { bid, grace }: Solution,
 ) -> Output {
     let old_bid = inline if Truth.state.winning_bid.amount == 0 {
         nil
@@ -30,6 +35,11 @@ fn main(
                 AssertBeforeSecondsRelative { seconds: TIMINGS.grace_period }
             } else {
                 AssertBeforeSecondsAbsolute { seconds: TIMINGS.end_time }
+            },
+
+            // Announce the bid, so that the bidder can assert it in their coin spends
+            CreateCoinAnnouncement {
+                message: tree_hash(bid),
             },
 
             // If there is a previous bid, we need to refund it in full

@@ -14,6 +14,6 @@ impl FlatBidVerifierArgs {
 }
 
 compile_rue!(
-    FlatBidVerifierArgs = FLAT_BID_VERIFIER,
+    debug FlatBidVerifierArgs = FLAT_BID_VERIFIER,
     "puzzles/bid_verifiers/flat_bid_verifier.rue"
 );

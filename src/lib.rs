@@ -1,5 +1,6 @@
 mod actions;
 mod auction;
+mod auction_reserve;
 mod bid_verifiers;
 mod info;
 mod launcher;
@@ -8,6 +9,7 @@ mod types;
 
 pub use actions::*;
 pub use auction::*;
+pub use auction_reserve::*;
 pub use bid_verifiers::*;
 pub use info::*;
 pub use launcher::*;
@@ -22,8 +24,8 @@ mod tests {
     use chia_wallet_sdk::prelude::*;
 
     use crate::{
-        AuctionAsset, AuctionExt, AuctionLauncherExt, AuctionSettings, BpsPayment, Payments,
-        Timings, auction_lock_p2_puzzle_hash, spend_auction_lock,
+        AuctionExt, AuctionLauncherExt, AuctionReserve, AuctionSettings, Bid, BpsPayment, Payments,
+        Timings, auction_lock_p2_puzzle_hash,
     };
 
     #[test]
@@ -34,8 +36,8 @@ mod tests {
         let alice = sim.bls(1002);
         let alice_p2 = StandardLayer::new(alice.pk);
 
-        let bp = sim.bls(0);
-        let commission = sim.bls(0);
+        let bob = sim.bls(1000);
+        let bob_p2 = StandardLayer::new(bob.pk);
 
         let (mint_nft, nft) = Launcher::new(alice.coin.coin_id(), 0)
             .with_singleton_amount(1)
@@ -46,7 +48,6 @@ mod tests {
 
         let launcher = Launcher::new(alice.coin.coin_id(), 1);
         let p2_puzzle_hash = auction_lock_p2_puzzle_hash(launcher.coin().coin_id());
-        let hint = ctx.hint(p2_puzzle_hash)?;
 
         let locked_nft = nft.spend_with(
             &mut ctx,
@@ -54,23 +55,23 @@ mod tests {
             Conditions::new().create_coin(p2_puzzle_hash, 1, Memos::None),
         )?;
 
+        let reserve_coin = Coin::new(alice.coin.coin_id(), p2_puzzle_hash, 0);
+
         let (launch_auction, auction) = launcher.launch_auction(
             &mut ctx,
             AuctionSettings {
-                minimum_bid: 1,
+                minimum_bid: 100,
                 bid_increment: 100,
                 timings: Timings::new(5, 0),
                 payments: Payments {
-                    buyers_premium: BpsPayment::new(300, bp.puzzle_hash),
-                    commission: BpsPayment::new(100, commission.puzzle_hash),
+                    buyers_premium: BpsPayment::new(300, Bytes32::new([1; 32])),
+                    commission: BpsPayment::new(100, Bytes32::new([2; 32])),
                     payout_puzzle_hash: alice.puzzle_hash,
                 },
             },
-            AuctionAsset::Xch,
+            AuctionReserve::Xch(reserve_coin),
             locked_nft.coin.coin_id(),
         )?;
-
-        let reserve_coin = Coin::new(alice.coin.coin_id(), p2_puzzle_hash, 0);
 
         alice_p2.spend(
             &mut ctx,
@@ -85,17 +86,12 @@ mod tests {
 
         sim.spend_coins(ctx.take(), slice::from_ref(&alice.sk))?;
 
-        let auction = auction.spend(&mut ctx, reserve_coin.parent_coin_info, vec![])?;
+        let bid_action =
+            auction.spend_bid_action(&mut ctx, Bid::new(99, bob.puzzle_hash), false)?;
+        let auction = auction.spend(&mut ctx, vec![bid_action], vec![])?;
+        bob_p2.spend(&mut ctx, bob.coin, Conditions::new())?;
 
-        let reserve_spend = spend_auction_lock(
-            &mut ctx,
-            auction.info.launcher_id,
-            auction.info.inner_puzzle_hash(),
-            Conditions::new().create_coin(p2_puzzle_hash, 0, hint),
-        )?;
-        ctx.spend(reserve_coin, reserve_spend)?;
-
-        sim.spend_coins(ctx.take(), slice::from_ref(&alice.sk))?;
+        sim.spend_coins(ctx.take(), slice::from_ref(&bob.sk))?;
 
         Ok(())
     }

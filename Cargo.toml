@@ -5,4 +5,4 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
-chia-wallet-sdk = { version = "0.33.0", features = ["action-layer"] }
+chia-wallet-sdk = { path = "../wallet-sdk", features = ["action-layer"] }

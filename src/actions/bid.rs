@@ -37,7 +37,7 @@ impl BidActionSolution {
 
 struct BidActionMod;
 
-compile_rue!(BidActionMod = BID_ACTION, "puzzles/actions/bid_action.rue");
+compile_rue!(debug BidActionMod = BID_ACTION, "puzzles/actions/bid_action.rue");
 
 impl<V> Mod for BidActionArgs<V> {
     fn mod_reveal() -> Cow<'static, [u8]> {

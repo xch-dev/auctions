@@ -3,14 +3,14 @@ use chia_wallet_sdk::{
     prelude::*,
 };
 
-use crate::{Auction, AuctionAsset, AuctionInfo, AuctionMemo, AuctionSettings, AuctionState};
+use crate::{Auction, AuctionInfo, AuctionMemo, AuctionReserve, AuctionSettings, AuctionState};
 
 pub trait AuctionLauncherExt {
     fn launch_auction(
         self,
         ctx: &mut SpendContext,
         settings: AuctionSettings,
-        asset: AuctionAsset,
+        reserve: AuctionReserve,
         nft_coin_id: Bytes32,
     ) -> Result<(Conditions, Auction), DriverError>;
 }
@@ -20,7 +20,7 @@ impl AuctionLauncherExt for Launcher {
         self,
         ctx: &mut SpendContext,
         settings: AuctionSettings,
-        asset: AuctionAsset,
+        reserve: AuctionReserve,
         nft_coin_id: Bytes32,
     ) -> Result<(Conditions, Auction), DriverError> {
         let launcher_coin = self.coin();
@@ -28,9 +28,9 @@ impl AuctionLauncherExt for Launcher {
         let info = AuctionInfo::new(
             launcher_coin.coin_id(),
             settings,
-            asset,
             nft_coin_id,
             AuctionState::initial(settings.payments.payout_puzzle_hash),
+            reserve,
         );
 
         let (conditions, coin) = self.spend(
