@@ -80,6 +80,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chia-wallet-sdk",
+ "serde_json",
 ]
 
 [[package]]
@@ -440,6 +441,7 @@ dependencies = [
  "chia-sha2 0.36.1",
  "clvm-traits 0.36.1",
  "clvmr",
+ "colored",
  "k256",
  "rue-lir",
  "thiserror 2.0.18",

@@ -129,17 +129,23 @@ impl AuctionExt for Auction {
                 }
 
                 state.reserve_amount = 0;
-                break;
             }
         }
 
-        reserve_conditions.push(CreateCoin::new(
-            self.info.reserve.p2_puzzle_hash(),
-            state.reserve_amount,
-            ctx.hint(self.info.reserve.p2_puzzle_hash())?,
-        ));
+        let mut reserve_conditions = reserve_conditions.into_iter().collect::<Vec<_>>();
 
-        Ok((reserve_conditions, state))
+        reserve_conditions.reverse();
+
+        reserve_conditions.insert(
+            0,
+            Condition::CreateCoin(CreateCoin::new(
+                self.info.reserve.p2_puzzle_hash(),
+                state.reserve_amount,
+                ctx.hint(self.info.reserve.p2_puzzle_hash())?,
+            )),
+        );
+
+        Ok((reserve_conditions.into(), state))
     }
 
     fn spend(
@@ -180,14 +186,6 @@ impl AuctionExt for Auction {
 
         let (reserve_conditions, state) = self.child_state(ctx, &action_spends)?;
 
-        let new_reserve_amount = reserve_conditions
-            .iter()
-            .last()
-            .unwrap()
-            .as_create_coin()
-            .unwrap()
-            .amount;
-
         let inner_spend = action_layer.construct_spend(
             ctx,
             ActionLayerSolution {
@@ -223,14 +221,14 @@ impl AuctionExt for Auction {
                 AuctionReserve::Xch(Coin::new(
                     coin.coin_id(),
                     coin.puzzle_hash,
-                    new_reserve_amount,
+                    state.reserve_amount,
                 ))
             }
             AuctionReserve::Cat(cat) => {
                 let cat_spend = CatSpend::new(cat, reserve_spend);
                 other_cat_spends.push(cat_spend);
                 Cat::spend_all(ctx, &other_cat_spends)?;
-                AuctionReserve::Cat(cat.child(cat.info.p2_puzzle_hash, new_reserve_amount))
+                AuctionReserve::Cat(cat.child(cat.info.p2_puzzle_hash, state.reserve_amount))
             }
         };
 

@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.100"
 chia-wallet-sdk = { path = "../wallet-sdk", features = ["action-layer"] }
+serde_json = "1.0.149"

@@ -25,7 +25,7 @@ mod tests {
 
     use crate::{
         AuctionExt, AuctionLauncherExt, AuctionReserve, AuctionSettings, Bid, BpsPayment, Payments,
-        Timings, auction_lock_p2_puzzle_hash,
+        Timings, auction_lock_p2_puzzle_hash, spend_auction_lock,
     };
 
     #[test]
@@ -82,16 +82,40 @@ mod tests {
                 .create_coin(alice.puzzle_hash, 1000, Memos::None),
         )?;
 
-        let remainder = Coin::new(alice.coin.coin_id(), alice.puzzle_hash, 1000);
+        let _remainder = Coin::new(alice.coin.coin_id(), alice.puzzle_hash, 1000);
 
         sim.spend_coins(ctx.take(), slice::from_ref(&alice.sk))?;
 
         let bid_action =
-            auction.spend_bid_action(&mut ctx, Bid::new(99, bob.puzzle_hash), false)?;
+            auction.spend_bid_action(&mut ctx, Bid::new(100, bob.puzzle_hash), false)?;
         let auction = auction.spend(&mut ctx, vec![bid_action], vec![])?;
         bob_p2.spend(&mut ctx, bob.coin, Conditions::new())?;
 
         sim.spend_coins(ctx.take(), slice::from_ref(&bob.sk))?;
+
+        let end_action = auction.spend_end_action(&mut ctx)?;
+        let bob_hint = ctx.hint(bob.puzzle_hash)?;
+        let nft_spend = spend_auction_lock(
+            &mut ctx,
+            auction.info.launcher_id,
+            auction.info.inner_puzzle_hash(),
+            Conditions::new().create_coin(bob.puzzle_hash, 1, bob_hint),
+        )?;
+        let _auction = auction.spend(&mut ctx, vec![end_action], vec![])?;
+        let _nft = locked_nft.spend(&mut ctx, nft_spend)?;
+
+        let coin_spends = ctx.take();
+
+        for coin_spend in &coin_spends {
+            ctx.insert(coin_spend.clone());
+        }
+
+        println!(
+            "{}",
+            serde_json::to_string(&SpendBundle::new(coin_spends, Signature::default()))?
+        );
+
+        sim.spend_coins(ctx.take(), &[])?;
 
         Ok(())
     }
