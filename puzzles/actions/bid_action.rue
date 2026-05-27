@@ -11,7 +11,7 @@ fn main(
     TIMINGS: Timings,
     BUYERS_PREMIUM_BPS: Int,
     Truth: AuctionStateTruth,
-    { bid, grace }: Solution,
+    ...{ bid, grace }: Solution,
 ) -> Output {
     let old_bid = inline if Truth.state.winning_bid.amount == 0 {
         nil
