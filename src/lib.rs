@@ -93,6 +93,8 @@ mod tests {
 
         sim.spend_coins(ctx.take(), slice::from_ref(&bob.sk))?;
 
+        sim.set_next_timestamp(5)?;
+
         let end_action = auction.spend_end_action(&mut ctx)?;
         let bob_hint = ctx.hint(bob.puzzle_hash)?;
         let nft_spend = spend_auction_lock(
