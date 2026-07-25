@@ -8,7 +8,7 @@ use chia_wallet_sdk::{
 
 use crate::{
     AuctionReserve, AuctionSettings, AuctionState, BidActionArgs, EndActionArgs,
-    FlatBidVerifierArgs,
+    FlatBidVerifierArgs, NftUnlocker,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,7 +62,10 @@ impl AuctionInfo {
     }
 
     pub fn end_action(&self, ctx: &mut SpendContext) -> Result<NodePtr, DriverError> {
+        let unlocker = ctx.alloc_mod::<NftUnlocker>()?;
+
         ctx.curry(EndActionArgs::new(
+            unlocker,
             self.settings.timings,
             self.settings.payments,
             self.nft_coin_id,
@@ -71,6 +74,7 @@ impl AuctionInfo {
 
     pub fn end_action_hash(&self) -> Bytes32 {
         EndActionArgs::new(
+            NftUnlocker::mod_hash(),
             self.settings.timings,
             self.settings.payments,
             self.nft_coin_id,

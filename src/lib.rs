@@ -6,6 +6,7 @@ mod info;
 mod launcher;
 mod p2;
 mod types;
+mod unlockers;
 
 pub use actions::*;
 pub use auction::*;
@@ -15,6 +16,7 @@ pub use info::*;
 pub use launcher::*;
 pub use p2::*;
 pub use types::*;
+pub use unlockers::*;
 
 #[cfg(test)]
 mod tests {
@@ -25,7 +27,7 @@ mod tests {
 
     use crate::{
         AuctionExt, AuctionLauncherExt, AuctionReserve, AuctionSettings, Bid, BpsPayment, Payments,
-        Timings, auction_lock_p2_puzzle_hash, spend_auction_lock,
+        Timings, auction_lock_p2_puzzle_hash,
     };
 
     #[test]
@@ -95,16 +97,9 @@ mod tests {
 
         sim.set_next_timestamp(5)?;
 
-        let end_action = auction.spend_end_action(&mut ctx)?;
-        let bob_hint = ctx.hint(bob.puzzle_hash)?;
-        let nft_spend = spend_auction_lock(
-            &mut ctx,
-            auction.info.launcher_id,
-            auction.info.inner_puzzle_hash(),
-            Conditions::new().create_coin(bob.puzzle_hash, 1, bob_hint),
-        )?;
+        let end_action = auction.spend_end_action(&mut ctx, &locked_nft)?;
+        let _nft = auction.unlock_nft(&mut ctx, &locked_nft)?;
         let _auction = auction.spend(&mut ctx, vec![end_action], vec![])?;
-        let _nft = locked_nft.spend(&mut ctx, nft_spend)?;
 
         let coin_spends = ctx.take();
 

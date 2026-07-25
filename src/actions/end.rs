@@ -4,15 +4,17 @@ use crate::{Payments, Timings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ToClvm, FromClvm)]
 #[clvm(curry)]
-pub struct EndActionArgs {
+pub struct EndActionArgs<U = NodePtr> {
+    pub unlocker: U,
     pub timings: Timings,
     pub payments: Payments,
     pub nft_coin_id: Bytes32,
 }
 
-impl EndActionArgs {
-    pub fn new(timings: Timings, payments: Payments, nft_coin_id: Bytes32) -> Self {
+impl<U> EndActionArgs<U> {
+    pub fn new(unlocker: U, timings: Timings, payments: Payments, nft_coin_id: Bytes32) -> Self {
         Self {
+            unlocker,
             timings,
             payments,
             nft_coin_id,
@@ -20,4 +22,7 @@ impl EndActionArgs {
     }
 }
 
-compile_rue!(debug EndActionArgs = END_ACTION, "puzzles/actions/end_action.rue");
+compile_rue!(
+    debug EndActionArgs<U> = END_ACTION,
+    "puzzles/actions/end_action.rue"
+);

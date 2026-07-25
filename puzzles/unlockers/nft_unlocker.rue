@@ -1,0 +1,13 @@
+import super::shared::*;
+
+fn main(Truth: Bid, nft_amount: Int) -> List<Condition> {
+    [
+        CreateCoin {
+            puzzle_hash: Truth.puzzle_hash,
+            amount: nft_amount,
+            memos: Memos {
+                value: [Truth.puzzle_hash],
+            },
+        },
+    ]
+}

@@ -10,7 +10,7 @@ use chia_wallet_sdk::{
 
 use crate::{
     AuctionInfo, AuctionReserve, AuctionState, Bid, BidActionArgs, BidActionSolution,
-    EndActionArgs, calculate_bps_payment, spend_auction_lock,
+    EndActionArgs, NftUnlocker, NftUnlockerSolution, calculate_bps_payment, spend_auction_lock,
 };
 
 pub type Auction = Singleton<AuctionInfo>;
@@ -23,7 +23,9 @@ pub trait AuctionExt: Sized {
         grace: bool,
     ) -> Result<Spend, DriverError>;
 
-    fn spend_end_action(&self, ctx: &mut SpendContext) -> Result<Spend, DriverError>;
+    fn spend_end_action(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Spend, DriverError>;
+
+    fn unlock_nft(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Nft, DriverError>;
 
     fn child_state(
         &self,
@@ -51,9 +53,29 @@ impl AuctionExt for Auction {
         Ok(Spend::new(puzzle, solution))
     }
 
-    fn spend_end_action(&self, ctx: &mut SpendContext) -> Result<Spend, DriverError> {
+    fn spend_end_action(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Spend, DriverError> {
         let puzzle = self.info.end_action(ctx)?;
-        Ok(Spend::new(puzzle, NodePtr::NIL))
+        let solution = ctx.alloc(&[nft.coin.amount])?;
+        Ok(Spend::new(puzzle, solution))
+    }
+
+    fn unlock_nft(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Nft, DriverError> {
+        let unlocker = ctx.alloc_mod::<NftUnlocker>()?;
+        let unlocker_solution = ctx.alloc(&NftUnlockerSolution::new(
+            self.info.state.winning_bid,
+            nft.coin.amount,
+        ))?;
+        let conditions = ctx.run(unlocker, unlocker_solution)?;
+        let conditions = ctx.extract::<Vec<Condition>>(conditions)?.into();
+
+        let spend = spend_auction_lock(
+            ctx,
+            self.info.launcher_id,
+            self.info.inner_puzzle_hash(),
+            conditions,
+        )?;
+
+        nft.spend(ctx, spend)
     }
 
     fn child_state(
@@ -85,7 +107,7 @@ impl AuctionExt for Auction {
                         solution.bid.amount,
                         self.info.settings.payments.buyers_premium.bps,
                     );
-            } else if puzzle.mod_hash() == EndActionArgs::mod_hash() {
+            } else if puzzle.mod_hash() == EndActionArgs::<NodePtr>::mod_hash() {
                 let buyers_premium = self.info.settings.payments.buyers_premium;
                 let commission = self.info.settings.payments.commission;
                 let payout_puzzle_hash = self.info.settings.payments.payout_puzzle_hash;

@@ -6,15 +6,22 @@ struct Payments {
     ...payout_puzzle_hash: Bytes32,
 }
 
+struct Solution {
+    ...unlocker_solution: Any,
+}
+
 fn main(
+    UNLOCKER: fn(Truth: Bid, ...solution: Any) -> List<Condition>,
     TIMINGS: Timings,
     PAYMENTS: Payments,
     NFT_COIN_ID: Bytes32,
     Truth: AuctionStateTruth,
+    ...{ unlocker_solution }: Solution,
 ) -> Output {
     let buyers_premium = calculate_bps_payment(Truth.state.winning_bid.amount, PAYMENTS.buyers_premium.bps);
     let commission = calculate_bps_payment(Truth.state.winning_bid.amount, PAYMENTS.commission.bps);
     let payout = Truth.state.winning_bid.amount - commission;
+    let unlock_conditions = UNLOCKER(Truth.state.winning_bid, ...unlocker_solution);
 
     Output {
         new_truth: AuctionStateTruth {
@@ -74,15 +81,7 @@ fn main(
             SendMessage {
                 mode: SENDER_PUZZLE | RECEIVER_COIN,
                 receiver: [NFT_COIN_ID],
-                message: tree_hash((1, [
-                    CreateCoin {
-                        puzzle_hash: Truth.state.winning_bid.puzzle_hash,
-                        amount: 1,
-                        memos: Memos {
-                            value: [Truth.state.winning_bid.puzzle_hash],
-                        },
-                    },
-                ])),
+                message: tree_hash((1, unlock_conditions)),
             },
 
             // We always need to make sure the auction is over
