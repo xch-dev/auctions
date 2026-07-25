@@ -1,5 +1,6 @@
 use chia_wallet_sdk::{
     prelude::*,
+    puzzles::SETTLEMENT_PAYMENT_HASH,
     types::puzzles::{
         ActionLayerArgs, RESERVE_FINALIZER_DEFAULT_RESERVE_AMOUNT_FROM_STATE_PROGRAM_HASH,
         ReserveFinalizer2ndCurryArgs,
@@ -8,7 +9,7 @@ use chia_wallet_sdk::{
 
 use crate::{
     AuctionReserve, AuctionSettings, AuctionState, BidActionArgs, EndActionArgs,
-    FlatBidVerifierArgs, NftUnlocker,
+    FlatBidVerifierArgs, NftUnlockerArgs,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,6 +17,7 @@ pub struct AuctionInfo {
     pub launcher_id: Bytes32,
     pub settings: AuctionSettings,
     pub nft_coin_id: Bytes32,
+    pub nft_royalty: RoyaltyInfo,
     pub state: AuctionState,
     pub reserve: AuctionReserve,
 }
@@ -25,6 +27,7 @@ impl AuctionInfo {
         launcher_id: Bytes32,
         settings: AuctionSettings,
         nft_coin_id: Bytes32,
+        nft_royalty: RoyaltyInfo,
         state: AuctionState,
         reserve: AuctionReserve,
     ) -> Self {
@@ -32,6 +35,7 @@ impl AuctionInfo {
             launcher_id,
             settings,
             nft_coin_id,
+            nft_royalty,
             state,
             reserve,
         }
@@ -46,7 +50,7 @@ impl AuctionInfo {
         ctx.curry(BidActionArgs::new(
             bid_verifier,
             self.settings.timings,
-            self.settings.payments.buyers_premium.bps,
+            self.settings.payments.buyers_premium.bps + u64::from(self.nft_royalty.basis_points),
         ))
     }
 
@@ -55,29 +59,37 @@ impl AuctionInfo {
             FlatBidVerifierArgs::new(self.settings.minimum_bid, self.settings.bid_increment)
                 .curry_tree_hash(),
             self.settings.timings,
-            self.settings.payments.buyers_premium.bps,
+            self.settings.payments.buyers_premium.bps + u64::from(self.nft_royalty.basis_points),
         )
         .curry_tree_hash()
         .into()
     }
 
     pub fn end_action(&self, ctx: &mut SpendContext) -> Result<NodePtr, DriverError> {
-        let unlocker = ctx.alloc_mod::<NftUnlocker>()?;
+        let has_royalty = self.nft_royalty.basis_points > 0;
+        let unlocker = ctx.curry(NftUnlockerArgs::new(
+            has_royalty.then(|| self.reserve.settlement_puzzle_hash()),
+        ))?;
 
         ctx.curry(EndActionArgs::new(
             unlocker,
             self.settings.timings,
             self.settings.payments,
             self.nft_coin_id,
+            has_royalty.then(|| SETTLEMENT_PAYMENT_HASH.into()),
         ))
     }
 
     pub fn end_action_hash(&self) -> Bytes32 {
+        let has_royalty = self.nft_royalty.basis_points > 0;
+
         EndActionArgs::new(
-            NftUnlocker::mod_hash(),
+            NftUnlockerArgs::new(has_royalty.then(|| self.reserve.settlement_puzzle_hash()))
+                .curry_tree_hash(),
             self.settings.timings,
             self.settings.payments,
             self.nft_coin_id,
+            has_royalty.then(|| SETTLEMENT_PAYMENT_HASH.into()),
         )
         .curry_tree_hash()
         .into()

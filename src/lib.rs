@@ -23,7 +23,9 @@ mod tests {
     use std::slice;
 
     use anyhow::Result;
-    use chia_wallet_sdk::prelude::*;
+    use chia_wallet_sdk::{
+        driver::calculate_nft_royalty, prelude::*, puzzles::SETTLEMENT_PAYMENT_HASH,
+    };
 
     use crate::{
         AuctionExt, AuctionLauncherExt, AuctionReserve, AuctionSettings, Bid, BpsPayment, Payments,
@@ -45,7 +47,7 @@ mod tests {
             .with_singleton_amount(1)
             .mint_nft(
                 &mut ctx,
-                &NftMint::new(HashedPtr::NIL, alice.puzzle_hash, 0, None),
+                &NftMint::new(HashedPtr::NIL, alice.puzzle_hash, 500, None),
             )?;
 
         let launcher = Launcher::new(alice.coin.coin_id(), 1);
@@ -72,7 +74,7 @@ mod tests {
                 },
             },
             AuctionReserve::Xch(reserve_coin),
-            locked_nft.coin.coin_id(),
+            &locked_nft,
         )?;
 
         alice_p2.spend(
@@ -83,8 +85,6 @@ mod tests {
                 .create_coin(reserve_coin.puzzle_hash, 0, Memos::None)
                 .create_coin(alice.puzzle_hash, 1000, Memos::None),
         )?;
-
-        let _remainder = Coin::new(alice.coin.coin_id(), alice.puzzle_hash, 1000);
 
         sim.spend_coins(ctx.take(), slice::from_ref(&alice.sk))?;
 
@@ -97,22 +97,20 @@ mod tests {
 
         sim.set_next_timestamp(5)?;
 
+        let reserve_coin_id = auction.info.reserve.coin().coin_id();
         let end_action = auction.spend_end_action(&mut ctx, &locked_nft)?;
         let _nft = auction.unlock_nft(&mut ctx, &locked_nft)?;
         let _auction = auction.spend(&mut ctx, vec![end_action], vec![])?;
 
-        let coin_spends = ctx.take();
-
-        for coin_spend in &coin_spends {
-            ctx.insert(coin_spend.clone());
-        }
-
-        println!(
-            "{}",
-            serde_json::to_string(&SpendBundle::new(coin_spends, Signature::default()))?
-        );
-
         sim.spend_coins(ctx.take(), &[])?;
+
+        let settlement_coin = Coin::new(reserve_coin_id, SETTLEMENT_PAYMENT_HASH.into(), 0);
+        let royalty_coin = Coin::new(
+            settlement_coin.coin_id(),
+            alice.puzzle_hash,
+            calculate_nft_royalty(100, 500),
+        );
+        assert!(sim.coin_state(royalty_coin.coin_id()).is_some());
 
         Ok(())
     }

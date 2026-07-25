@@ -11,7 +11,7 @@ pub trait AuctionLauncherExt {
         ctx: &mut SpendContext,
         settings: AuctionSettings,
         reserve: AuctionReserve,
-        nft_coin_id: Bytes32,
+        nft: &Nft,
     ) -> Result<(Conditions, Auction), DriverError>;
 }
 
@@ -21,14 +21,19 @@ impl AuctionLauncherExt for Launcher {
         ctx: &mut SpendContext,
         settings: AuctionSettings,
         reserve: AuctionReserve,
-        nft_coin_id: Bytes32,
+        nft: &Nft,
     ) -> Result<(Conditions, Auction), DriverError> {
         let launcher_coin = self.coin();
 
         let info = AuctionInfo::new(
             launcher_coin.coin_id(),
             settings,
-            nft_coin_id,
+            nft.coin.coin_id(),
+            RoyaltyInfo::new(
+                nft.info.launcher_id,
+                nft.info.royalty_puzzle_hash,
+                nft.info.royalty_basis_points,
+            ),
             AuctionState::initial(settings.payments.payout_puzzle_hash),
             reserve,
         );

@@ -1,8 +1,12 @@
 use chia_wallet_sdk::{
-    chia::puzzle_types::singleton::SingletonSolution,
+    chia::puzzle_types::{
+        offer::{NotarizedPayment, Payment, SettlementPaymentsSolution},
+        singleton::SingletonSolution,
+    },
     clvmr::serde::node_from_bytes,
-    driver::{ActionLayer, ActionLayerSolution, Finalizer, SingletonLayer},
+    driver::{ActionLayer, ActionLayerSolution, Finalizer, SingletonLayer, calculate_nft_royalty},
     prelude::*,
+    puzzles::SETTLEMENT_PAYMENT_HASH,
     types::puzzles::{
         RESERVE_FINALIZER_DEFAULT_RESERVE_AMOUNT_FROM_STATE_PROGRAM, ReserveFinalizerSolution,
     },
@@ -10,7 +14,8 @@ use chia_wallet_sdk::{
 
 use crate::{
     AuctionInfo, AuctionReserve, AuctionState, Bid, BidActionArgs, BidActionSolution,
-    EndActionArgs, NftUnlocker, NftUnlockerSolution, calculate_bps_payment, spend_auction_lock,
+    EndActionArgs, EndActionSolution, NftUnlockerArgs, NftUnlockerSolution, calculate_bps_payment,
+    spend_auction_lock,
 };
 
 pub type Auction = Singleton<AuctionInfo>;
@@ -55,12 +60,15 @@ impl AuctionExt for Auction {
 
     fn spend_end_action(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Spend, DriverError> {
         let puzzle = self.info.end_action(ctx)?;
-        let solution = ctx.alloc(&[nft.coin.amount])?;
+        let solution = ctx.alloc(&EndActionSolution::new(nft.coin.amount))?;
         Ok(Spend::new(puzzle, solution))
     }
 
     fn unlock_nft(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Nft, DriverError> {
-        let unlocker = ctx.alloc_mod::<NftUnlocker>()?;
+        let unlocker = ctx.curry(NftUnlockerArgs::new(
+            (self.info.nft_royalty.basis_points > 0)
+                .then(|| self.info.reserve.settlement_puzzle_hash()),
+        ))?;
         let unlocker_solution = ctx.alloc(&NftUnlockerSolution::new(
             self.info.state.winning_bid,
             nft.coin.amount,
@@ -105,7 +113,8 @@ impl AuctionExt for Auction {
                 state.reserve_amount = solution.bid.amount
                     + calculate_bps_payment(
                         solution.bid.amount,
-                        self.info.settings.payments.buyers_premium.bps,
+                        self.info.settings.payments.buyers_premium.bps
+                            + u64::from(self.info.nft_royalty.basis_points),
                     );
             } else if puzzle.mod_hash() == EndActionArgs::<NodePtr>::mod_hash() {
                 let buyers_premium = self.info.settings.payments.buyers_premium;
@@ -150,6 +159,14 @@ impl AuctionExt for Auction {
                     reserve_conditions.push(Remark::new(NodePtr::NIL));
                 }
 
+                if self.info.nft_royalty.basis_points > 0 {
+                    reserve_conditions.push(CreateCoin::new(
+                        SETTLEMENT_PAYMENT_HASH.into(),
+                        0,
+                        Memos::None,
+                    ));
+                }
+
                 state.reserve_amount = 0;
             }
         }
@@ -177,6 +194,28 @@ impl AuctionExt for Auction {
         mut other_cat_spends: Vec<CatSpend>,
     ) -> Result<Self, DriverError> {
         let merkle_tree = self.info.merkle_tree();
+        let settles_royalty = self.info.nft_royalty.basis_points > 0
+            && action_spends.iter().any(|spend| {
+                Puzzle::parse(ctx, spend.puzzle).mod_hash() == EndActionArgs::<NodePtr>::mod_hash()
+            });
+
+        let royalty_payment = if settles_royalty {
+            let amount = calculate_nft_royalty(
+                self.info.state.winning_bid.amount,
+                self.info.nft_royalty.basis_points,
+            );
+            Some(NotarizedPayment::new(
+                self.info.nft_royalty.launcher_id,
+                vec![Payment::new(
+                    self.info.nft_royalty.puzzle_hash,
+                    amount,
+                    ctx.hint(self.info.nft_royalty.puzzle_hash)?,
+                )],
+            ))
+        } else {
+            None
+        };
+
         let reserve_amount_from_state_program = node_from_bytes(
             ctx,
             &RESERVE_FINALIZER_DEFAULT_RESERVE_AMOUNT_FROM_STATE_PROGRAM,
@@ -240,6 +279,18 @@ impl AuctionExt for Auction {
         let new_reserve = match self.info.reserve {
             AuctionReserve::Xch(coin) => {
                 ctx.spend(coin, reserve_spend)?;
+
+                if let Some(royalty_payment) = royalty_payment {
+                    let settlement_coin =
+                        Coin::new(coin.coin_id(), SETTLEMENT_PAYMENT_HASH.into(), 0);
+                    let settlement_spend = SettlementLayer.construct_coin_spend(
+                        ctx,
+                        settlement_coin,
+                        SettlementPaymentsSolution::new(vec![royalty_payment]),
+                    )?;
+                    ctx.insert(settlement_spend);
+                }
+
                 AuctionReserve::Xch(Coin::new(
                     coin.coin_id(),
                     coin.puzzle_hash,
@@ -247,6 +298,17 @@ impl AuctionExt for Auction {
                 ))
             }
             AuctionReserve::Cat(cat) => {
+                if let Some(royalty_payment) = royalty_payment {
+                    let settlement_spend = SettlementLayer.construct_spend(
+                        ctx,
+                        SettlementPaymentsSolution::new(vec![royalty_payment]),
+                    )?;
+                    other_cat_spends.push(CatSpend::new(
+                        cat.child(SETTLEMENT_PAYMENT_HASH.into(), 0),
+                        settlement_spend,
+                    ));
+                }
+
                 let cat_spend = CatSpend::new(cat, reserve_spend);
                 other_cat_spends.push(cat_spend);
                 Cat::spend_all(ctx, &other_cat_spends)?;
@@ -259,6 +321,7 @@ impl AuctionExt for Auction {
                 self.info.launcher_id,
                 self.info.settings,
                 self.info.nft_coin_id,
+                self.info.nft_royalty,
                 state,
                 new_reserve,
             ),

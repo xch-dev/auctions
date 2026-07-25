@@ -11,10 +11,11 @@ struct Solution {
 }
 
 fn main(
-    UNLOCKER: fn(Truth: Bid, ...solution: Any) -> List<Condition>,
+    UNLOCKER: fn(Truth: Bid, ...solution: Any) -> List<NftCondition>,
     TIMINGS: Timings,
     PAYMENTS: Payments,
     NFT_COIN_ID: Bytes32,
+    SETTLEMENT_PAYMENT_HASH: Bytes32 | nil,
     Truth: AuctionStateTruth,
     ...{ unlocker_solution }: Solution,
 ) -> Output {
@@ -75,6 +76,19 @@ fn main(
                 }
             } else {
                 Remark {}
+            },
+
+            // Create an ephemeral settlement coin used to pay the NFT royalty
+            inline if SETTLEMENT_PAYMENT_HASH is nil {
+                Remark {}
+            } else {
+                ReserveCondition {
+                    condition: CreateCoin {
+                        puzzle_hash: unchecked_cast::<Bytes32>(SETTLEMENT_PAYMENT_HASH),
+                        amount: 0,
+                        memos: nil,
+                    },
+                }
             },
 
             // Authorize the NFT to be sent to the winning bidder

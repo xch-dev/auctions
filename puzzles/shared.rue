@@ -37,6 +37,20 @@ export struct BpsPayment {
     ...puzzle_hash: Bytes32,
 }
 
+export struct TradePrice {
+    amount: Int,
+    puzzle_hash: Bytes32,
+}
+
+export struct TransferNft {
+    opcode = -10,
+    launcher_id: Bytes32 | nil,
+    trade_prices: List<TradePrice>,
+    singleton_inner_puzzle_hash: Bytes32 | nil,
+}
+
+export type NftCondition = Condition | TransferNft;
+
 export inline fn calculate_bps_payment(bid_amount: Int, bps: Int) -> Int {
     bid_amount * bps / 10000
 }

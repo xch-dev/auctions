@@ -9,7 +9,7 @@ struct Solution {
 fn main(
     BID_VERIFIER: BidVerifier,
     TIMINGS: Timings,
-    BUYERS_PREMIUM_BPS: Int,
+    TOTAL_BPS: Int,
     Truth: AuctionStateTruth,
     ...{ bid, grace }: Solution,
 ) -> Output {
@@ -24,7 +24,7 @@ fn main(
     Output {
         new_truth: AuctionStateTruth {
             state: AuctionState {
-                reserve_amount: bid.amount + calculate_bps_payment(bid.amount, BUYERS_PREMIUM_BPS),
+                reserve_amount: bid.amount + calculate_bps_payment(bid.amount, TOTAL_BPS),
                 winning_bid: bid,
             },
             ephemeral_state: Truth.ephemeral_state,

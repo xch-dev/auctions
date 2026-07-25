@@ -7,15 +7,15 @@ use crate::{Bid, Timings};
 pub struct BidActionArgs<V = NodePtr> {
     pub bid_verifier: V,
     pub timings: Timings,
-    pub buyers_premium_bps: u64,
+    pub total_bps: u64,
 }
 
 impl<V> BidActionArgs<V> {
-    pub fn new(bid_verifier: V, timings: Timings, buyers_premium_bps: u64) -> Self {
+    pub fn new(bid_verifier: V, timings: Timings, total_bps: u64) -> Self {
         Self {
             bid_verifier,
             timings,
-            buyers_premium_bps,
+            total_bps,
         }
     }
 }

@@ -1,6 +1,10 @@
 import super::shared::*;
 
-fn main(Truth: Bid, nft_amount: Int) -> List<Condition> {
+fn main(
+    SETTLEMENT_PUZZLE_HASH: Bytes32 | nil,
+    Truth: Bid,
+    nft_amount: Int,
+) -> List<NftCondition> {
     [
         CreateCoin {
             puzzle_hash: Truth.puzzle_hash,
@@ -8,6 +12,19 @@ fn main(Truth: Bid, nft_amount: Int) -> List<Condition> {
             memos: Memos {
                 value: [Truth.puzzle_hash],
             },
+        },
+
+        ...inline if SETTLEMENT_PUZZLE_HASH is nil {
+            nil
+        } else {
+            [TransferNft {
+                launcher_id: nil,
+                trade_prices: [TradePrice {
+                    amount: Truth.amount,
+                    puzzle_hash: unchecked_cast::<Bytes32>(SETTLEMENT_PUZZLE_HASH),
+                }],
+                singleton_inner_puzzle_hash: nil,
+            }]
         },
     ]
 }
