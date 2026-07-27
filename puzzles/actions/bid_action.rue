@@ -38,9 +38,7 @@ fn main(
             },
 
             // Announce the bid, so that the bidder can assert it in their coin spends
-            CreateCoinAnnouncement {
-                message: tree_hash(bid),
-            },
+            CreateCoinAnnouncement { message: tree_hash(bid) },
 
             // If there is a previous bid, we need to refund it in full
             ...inline if Truth.state.winning_bid.amount == 0 {
@@ -50,10 +48,8 @@ fn main(
                     condition: CreateCoin {
                         puzzle_hash: Truth.state.winning_bid.puzzle_hash,
                         amount: Truth.state.reserve_amount,
-                        memos: Memos {
-                            value: [Truth.state.winning_bid.puzzle_hash],
-                        },
-                    }
+                        memos: Memos { value: [Truth.state.winning_bid.puzzle_hash] },
+                    },
                 }]
             },
         ],

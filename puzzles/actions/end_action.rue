@@ -19,17 +19,17 @@ fn main(
     Truth: AuctionStateTruth,
     ...{ unlocker_solution }: Solution,
 ) -> Output {
-    let buyers_premium = calculate_bps_payment(Truth.state.winning_bid.amount, PAYMENTS.buyers_premium.bps);
+    let buyers_premium = calculate_bps_payment(
+        Truth.state.winning_bid.amount,
+        PAYMENTS.buyers_premium.bps,
+    );
     let commission = calculate_bps_payment(Truth.state.winning_bid.amount, PAYMENTS.commission.bps);
     let payout = Truth.state.winning_bid.amount - commission;
     let unlock_conditions = UNLOCKER(Truth.state.winning_bid, ...unlocker_solution);
 
     Output {
         new_truth: AuctionStateTruth {
-            state: AuctionState {
-                reserve_amount: 0,
-                winning_bid: Truth.state.winning_bid,
-            },
+            state: AuctionState { reserve_amount: 0, winning_bid: Truth.state.winning_bid },
             ephemeral_state: Truth.ephemeral_state,
         },
         conditions: [
@@ -41,9 +41,7 @@ fn main(
                     condition: CreateCoin {
                         puzzle_hash: PAYMENTS.buyers_premium.puzzle_hash,
                         amount: buyers_premium,
-                        memos: Memos {
-                            value: [PAYMENTS.buyers_premium.puzzle_hash],
-                        }
+                        memos: Memos { value: [PAYMENTS.buyers_premium.puzzle_hash] },
                     },
                 }
             },
@@ -56,9 +54,7 @@ fn main(
                     condition: CreateCoin {
                         puzzle_hash: PAYMENTS.commission.puzzle_hash,
                         amount: commission,
-                        memos: Memos {
-                            value: [PAYMENTS.commission.puzzle_hash],
-                        }
+                        memos: Memos { value: [PAYMENTS.commission.puzzle_hash] },
                     },
                 }
             },
@@ -69,10 +65,8 @@ fn main(
                     condition: CreateCoin {
                         puzzle_hash: PAYMENTS.payout_puzzle_hash,
                         amount: payout,
-                        memos: Memos {
-                            value: [PAYMENTS.payout_puzzle_hash],
-                        }
-                    }
+                        memos: Memos { value: [PAYMENTS.payout_puzzle_hash] },
+                    },
                 }
             } else {
                 Remark {}
@@ -102,9 +96,7 @@ fn main(
             AssertSecondsAbsolute { seconds: TIMINGS.end_time },
 
             // Announce the end of the auction
-            CreateCoinAnnouncement {
-                message: "$",
-            },
+            CreateCoinAnnouncement { message: "$" },
 
             // If there is a grace period, we need to make sure it's over too
             ...inline if TIMINGS.grace_period > 0 {

@@ -1,11 +1,6 @@
 import super::shared::*;
 
-fn main(
-    MINIMUM: Int,
-    INCREMENT: Int,
-    old: Bid | nil,
-    new: Bid,
-) -> Bool {
+fn main(MINIMUM: Int, INCREMENT: Int, old: Bid | nil, new: Bid) -> Bool {
     if old is nil {
         return new.amount > MINIMUM - 1;
     }

@@ -1,17 +1,11 @@
 import super::shared::*;
 
-fn main(
-    SETTLEMENT_PUZZLE_HASH: Bytes32 | nil,
-    Truth: Bid,
-    nft_amount: Int,
-) -> List<NftCondition> {
+fn main(SETTLEMENT_PUZZLE_HASH: Bytes32 | nil, Truth: Bid, nft_amount: Int) -> List<NftCondition> {
     [
         CreateCoin {
             puzzle_hash: Truth.puzzle_hash,
             amount: nft_amount,
-            memos: Memos {
-                value: [Truth.puzzle_hash],
-            },
+            memos: Memos { value: [Truth.puzzle_hash] },
         },
 
         ...inline if SETTLEMENT_PUZZLE_HASH is nil {
