@@ -8,8 +8,8 @@ use chia_wallet_sdk::{
 };
 
 use crate::{
-    AuctionReserve, AuctionSettings, AuctionState, BidActionArgs, EndActionArgs,
-    FlatBidVerifierArgs, NftUnlockerArgs,
+    AuctionReserve, AuctionSettings, AuctionState, BidActionArgs, BidVerifier, EndActionArgs,
+    FlatBidVerifierArgs, NftUnlockerArgs, PercentBidVerifierArgs,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,10 +42,16 @@ impl AuctionInfo {
     }
 
     pub fn bid_action(&self, ctx: &mut SpendContext) -> Result<NodePtr, DriverError> {
-        let bid_verifier = ctx.curry(FlatBidVerifierArgs::new(
-            self.settings.minimum_bid,
-            self.settings.bid_increment,
-        ))?;
+        let bid_verifier = match self.settings.bid_verifier {
+            BidVerifier::Flat {
+                minimum_bid,
+                bid_increment,
+            } => ctx.curry(FlatBidVerifierArgs::new(minimum_bid, bid_increment))?,
+            BidVerifier::Percent {
+                minimum_bid,
+                bid_increment_bps,
+            } => ctx.curry(PercentBidVerifierArgs::new(minimum_bid, bid_increment_bps))?,
+        };
 
         ctx.curry(BidActionArgs::new(
             bid_verifier,
@@ -55,9 +61,19 @@ impl AuctionInfo {
     }
 
     pub fn bid_action_hash(&self) -> Bytes32 {
+        let bid_verifier_hash = match self.settings.bid_verifier {
+            BidVerifier::Flat {
+                minimum_bid,
+                bid_increment,
+            } => FlatBidVerifierArgs::new(minimum_bid, bid_increment).curry_tree_hash(),
+            BidVerifier::Percent {
+                minimum_bid,
+                bid_increment_bps,
+            } => PercentBidVerifierArgs::new(minimum_bid, bid_increment_bps).curry_tree_hash(),
+        };
+
         BidActionArgs::new(
-            FlatBidVerifierArgs::new(self.settings.minimum_bid, self.settings.bid_increment)
-                .curry_tree_hash(),
+            bid_verifier_hash,
             self.settings.timings,
             self.settings.payments.buyers_premium.bps + u64::from(self.nft_royalty.basis_points),
         )

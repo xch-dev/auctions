@@ -24,7 +24,7 @@ fn main(
     Output {
         new_truth: AuctionStateTruth {
             state: AuctionState {
-                reserve_amount: bid.amount + calculate_bps_payment(bid.amount, TOTAL_BPS),
+                reserve_amount: bid.amount + calculate_bps_amount(bid.amount, TOTAL_BPS),
                 winning_bid: bid,
             },
             ephemeral_state: Truth.ephemeral_state,

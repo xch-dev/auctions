@@ -28,8 +28,8 @@ mod tests {
     };
 
     use crate::{
-        AuctionExt, AuctionLauncherExt, AuctionReserve, AuctionSettings, Bid, BpsPayment, Payments,
-        Timings, auction_lock_p2_puzzle_hash,
+        AuctionExt, AuctionLauncherExt, AuctionReserve, AuctionSettings, Bid, BidVerifier,
+        BpsPayment, Payments, Timings, auction_lock_p2_puzzle_hash,
     };
 
     #[test]
@@ -64,8 +64,10 @@ mod tests {
         let (launch_auction, auction) = launcher.launch_auction(
             &mut ctx,
             AuctionSettings {
-                minimum_bid: 100,
-                bid_increment: 100,
+                bid_verifier: BidVerifier::Flat {
+                    minimum_bid: 100,
+                    bid_increment: 100,
+                },
                 timings: Timings::new(5, 0),
                 payments: Payments {
                     buyers_premium: BpsPayment::new(300, Bytes32::new([1; 32])),

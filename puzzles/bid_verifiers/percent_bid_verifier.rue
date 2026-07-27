@@ -1,0 +1,9 @@
+import super::shared::*;
+
+fn main(MINIMUM: Int, INCREMENT_BPS: Int, old: Bid | nil, new: Bid) -> Bool {
+    if old is nil {
+        return new.amount > MINIMUM - 1;
+    }
+
+    new.amount > old.amount + calculate_bps_amount(old.amount, INCREMENT_BPS) - 1
+}

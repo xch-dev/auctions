@@ -60,10 +60,23 @@ pub struct Payments {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ToClvm, FromClvm)]
 #[clvm(list)]
 pub struct AuctionSettings {
-    pub minimum_bid: u64,
-    pub bid_increment: u64,
+    pub bid_verifier: BidVerifier,
     pub timings: Timings,
     pub payments: Payments,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ToClvm, FromClvm)]
+#[clvm(list)]
+#[repr(u8)]
+pub enum BidVerifier {
+    Flat {
+        minimum_bid: u64,
+        bid_increment: u64,
+    } = 0,
+    Percent {
+        minimum_bid: u64,
+        bid_increment_bps: u64,
+    } = 1,
 }
 
 #[apply_constants]

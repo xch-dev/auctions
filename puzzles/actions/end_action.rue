@@ -19,11 +19,11 @@ fn main(
     Truth: AuctionStateTruth,
     ...{ unlocker_solution }: Solution,
 ) -> Output {
-    let buyers_premium = calculate_bps_payment(
+    let buyers_premium = calculate_bps_amount(
         Truth.state.winning_bid.amount,
         PAYMENTS.buyers_premium.bps,
     );
-    let commission = calculate_bps_payment(Truth.state.winning_bid.amount, PAYMENTS.commission.bps);
+    let commission = calculate_bps_amount(Truth.state.winning_bid.amount, PAYMENTS.commission.bps);
     let payout = Truth.state.winning_bid.amount - commission;
     let unlock_conditions = UNLOCKER(Truth.state.winning_bid, ...unlocker_solution);
 
