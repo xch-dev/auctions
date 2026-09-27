@@ -196,6 +196,22 @@ fn rejects_reserved_payment_puzzle_hashes() {
 }
 
 #[test]
+fn rejects_singleton_amounts_other_than_1() -> Result<()> {
+    // The reserve finalizer always recreates the singleton with an amount of 1
+    let mut h = Harness::new(Config::default())?;
+    let launcher = Launcher::new(h.seller.coin.coin_id(), 3);
+    let info = h.auction.info;
+
+    let result = launcher.launch_auction(&mut h.ctx, info.settings, info.reserve, &h.nft);
+    assert!(
+        matches!(result, Err(AuctionError::InvalidSingletonAmount(3))),
+        "{result:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn bps_math_does_not_overflow() -> Result<()> {
     assert_eq!(calculate_bps_payment(u64::MAX, MAX_BPS), Some(u64::MAX));
     assert_eq!(calculate_bps_payment(u64::MAX, 5_000), Some(u64::MAX / 2));

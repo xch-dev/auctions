@@ -14,8 +14,8 @@ use chia_wallet_sdk::{
 };
 
 use crate::{
-    AuctionInfo, AuctionReserve, AuctionState, Bid, BidActionSolution, NftUnlockerSolution,
-    spend_auction_lock,
+    AUCTION_SINGLETON_AMOUNT, AuctionInfo, AuctionReserve, AuctionState, Bid, BidActionSolution,
+    NftUnlockerSolution, spend_auction_lock,
 };
 
 pub type Auction = Singleton<AuctionInfo>;
@@ -63,7 +63,8 @@ pub trait AuctionExt: Sized {
     ) -> Result<Self, DriverError>;
 
     /// Parses the child of this auction, given the solution this auction's coin was spent with on
-    /// the blockchain.
+    /// the blockchain. The solution must come from a confirmed spend, since the action puzzles in it
+    /// are run without checking that they're the auction's.
     fn parse_child(&self, ctx: &mut SpendContext, solution: NodePtr) -> Result<Self, DriverError>;
 }
 
@@ -314,6 +315,6 @@ fn child_auction(auction: &Auction, spent_reserve: AuctionReserve, state: Auctio
             reserve: spent_reserve.child(state.reserve_amount),
             ..auction.info
         },
-        auction.coin.amount,
+        AUCTION_SINGLETON_AMOUNT,
     )
 }

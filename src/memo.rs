@@ -2,8 +2,9 @@ use chia_wallet_sdk::{chia::puzzle_types::LineageProof, clvm_traits::apply_const
 
 use crate::AuctionSettings;
 
-/// Stored in the launcher solution's key value list. It contains everything needed to reconstruct
-/// the auction from the launcher spend.
+/// Stored in the launcher solution's key value list. Along with the royalty info of the NFT at
+/// `nft_coin_id`, which wallets fetch from the blockchain, it contains everything needed to
+/// reconstruct the auction from the launcher spend.
 #[apply_constants]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
 #[clvm(list)]
@@ -11,19 +12,9 @@ pub struct AuctionMemo {
     #[clvm(constant = 0)]
     pub version: u8,
     pub settings: AuctionSettings,
-    pub nft: NftMemo,
+    pub nft_coin_id: Bytes32,
     #[clvm(rest)]
     pub reserve: ReserveMemo,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ToClvm, FromClvm)]
-#[clvm(list)]
-pub struct NftMemo {
-    pub coin_id: Bytes32,
-    pub launcher_id: Bytes32,
-    pub royalty_puzzle_hash: Bytes32,
-    #[clvm(rest)]
-    pub royalty_basis_points: u16,
 }
 
 /// The reserve is always an empty coin locked by the auction when it's launched, so only its parent

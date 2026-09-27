@@ -100,6 +100,10 @@ impl AuctionState {
 
 pub const MAX_BPS: u64 = 10_000;
 
+/// The reserve finalizer always recreates the auction singleton with an amount of 1, so auctions
+/// must be launched with it too.
+pub const AUCTION_SINGLETON_AMOUNT: u64 = 1;
+
 /// Rounds down, matching the puzzles. Returns [`None`] if the result doesn't fit in a [`u64`], which
 /// can only happen if `bps` is greater than [`MAX_BPS`].
 pub fn calculate_bps_payment(amount: u64, bps: u64) -> Option<u64> {

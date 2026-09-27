@@ -10,57 +10,86 @@ use chia_wallet_sdk::{
 };
 
 use crate::{
-    Auction, AuctionError, AuctionInfo, AuctionMemo, BidVerifier, MAX_BPS,
-    auction_lock_p2_puzzle_hash,
+    AUCTION_SINGLETON_AMOUNT, Auction, AuctionError, AuctionInfo, AuctionMemo, BidVerifier,
+    MAX_BPS, auction_lock_p2_puzzle_hash,
 };
 
-/// Parses a newly launched auction from the spend of its launcher coin.
+/// The spend of an auction's launcher coin, before it's been checked against the locked NFT.
 ///
-/// Returns [`None`] if the launcher isn't for an auction, and an error if it's for an invalid auction.
-/// Some things can't be checked offline, so wallets must also check the locked NFT and the reserve
-/// before bidding.
-pub fn parse_auction_launch(
-    allocator: &Allocator,
-    launcher_coin: Coin,
-    launcher_solution: NodePtr,
-) -> Result<Option<Auction>, AuctionError> {
-    if launcher_coin.puzzle_hash != SINGLETON_LAUNCHER_HASH.into() {
-        return Ok(None);
-    }
-
-    let Ok(solution) = LauncherSolution::<AuctionMemo>::from_clvm(allocator, launcher_solution)
-    else {
-        return Ok(None);
-    };
-
-    let launcher_id = launcher_coin.coin_id();
-    let info = AuctionInfo::from_memo(launcher_id, solution.key_value_list);
-
-    validate_auction(&info)?;
-
-    let puzzle_hash: Bytes32 =
-        SingletonArgs::curry_tree_hash(launcher_id, info.inner_puzzle_hash()).into();
-
-    if puzzle_hash != solution.singleton_puzzle_hash {
-        return Err(AuctionError::PuzzleHashMismatch);
-    }
-
-    if solution.amount % 2 == 0 {
-        return Err(AuctionError::EvenSingletonAmount(solution.amount));
-    }
-
-    let coin = Coin::new(launcher_id, puzzle_hash, solution.amount);
-
-    let proof = Proof::Eve(EveProof {
-        parent_parent_coin_info: launcher_coin.parent_coin_info,
-        parent_amount: launcher_coin.amount,
-    });
-
-    Ok(Some(Auction::new(coin, proof, info)))
+/// The NFT's royalty info is curried into the auction, but isn't stored in the memo. So wallets
+/// must fetch the NFT at [`nft_coin_id`](AuctionLaunch::nft_coin_id) from the blockchain, and pass
+/// its royalty info to [`into_auction`](AuctionLaunch::into_auction).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuctionLaunch {
+    pub launcher_coin: Coin,
+    pub memo: AuctionMemo,
+    pub singleton_puzzle_hash: Bytes32,
+    pub singleton_amount: u64,
 }
 
-/// Rejects auctions that can't always be ended. [`launch_auction`](crate::AuctionLauncherExt::launch_auction) runs the same checks, so
-/// that sellers can't launch an auction that wallets would reject.
+impl AuctionLaunch {
+    /// Returns [`None`] if the coin isn't a launcher, or its solution doesn't contain an auction memo.
+    pub fn parse(
+        allocator: &Allocator,
+        launcher_coin: Coin,
+        launcher_solution: NodePtr,
+    ) -> Option<Self> {
+        if launcher_coin.puzzle_hash != SINGLETON_LAUNCHER_HASH.into() {
+            return None;
+        }
+
+        let solution =
+            LauncherSolution::<AuctionMemo>::from_clvm(allocator, launcher_solution).ok()?;
+
+        Some(Self {
+            launcher_coin,
+            memo: solution.key_value_list,
+            singleton_puzzle_hash: solution.singleton_puzzle_hash,
+            singleton_amount: solution.amount,
+        })
+    }
+
+    pub fn nft_coin_id(&self) -> Bytes32 {
+        self.memo.nft_coin_id
+    }
+
+    /// Reconstructs the auction, given the royalty info of the NFT at
+    /// [`nft_coin_id`](AuctionLaunch::nft_coin_id). Returns an error if the auction is invalid, or
+    /// doesn't match the launched singleton, which includes a royalty that doesn't match the auction.
+    ///
+    /// Some things can't be checked offline, so wallets must also check the locked NFT and the
+    /// reserve before bidding.
+    pub fn into_auction(self, nft_royalty: RoyaltyInfo) -> Result<Auction, AuctionError> {
+        let launcher_id = self.launcher_coin.coin_id();
+        let info = AuctionInfo::from_memo(launcher_id, self.memo, nft_royalty);
+
+        validate_auction(&info)?;
+
+        if self.singleton_amount != AUCTION_SINGLETON_AMOUNT {
+            return Err(AuctionError::InvalidSingletonAmount(self.singleton_amount));
+        }
+
+        let puzzle_hash: Bytes32 =
+            SingletonArgs::curry_tree_hash(launcher_id, info.inner_puzzle_hash()).into();
+
+        if puzzle_hash != self.singleton_puzzle_hash {
+            return Err(AuctionError::PuzzleHashMismatch);
+        }
+
+        let coin = Coin::new(launcher_id, puzzle_hash, self.singleton_amount);
+
+        let proof = Proof::Eve(EveProof {
+            parent_parent_coin_info: self.launcher_coin.parent_coin_info,
+            parent_amount: self.launcher_coin.amount,
+        });
+
+        Ok(Auction::new(coin, proof, info))
+    }
+}
+
+/// Rejects auctions that can't always be ended. [`launch_auction`](crate::AuctionLauncherExt::launch_auction)
+/// runs the same checks, but the checks that are left to wallets, such as whether the NFT and
+/// reserve are locked by the auction, are the seller's responsibility when launching.
 pub(crate) fn validate_auction(info: &AuctionInfo) -> Result<(), AuctionError> {
     let (minimum_bid, bid_increment) = match info.settings.bid_verifier {
         BidVerifier::Flat {

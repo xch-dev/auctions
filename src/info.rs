@@ -9,8 +9,8 @@ use chia_wallet_sdk::{
 
 use crate::{
     AuctionMemo, AuctionReserve, AuctionSettings, AuctionState, BidActionArgs, BidVerifier,
-    EndActionArgs, FlatBidVerifierArgs, NftMemo, NftUnlockerArgs, PercentBidVerifierArgs,
-    ReserveMemo, auction_lock_p2_puzzle_hash, calculate_bps_payment,
+    EndActionArgs, FlatBidVerifierArgs, NftUnlockerArgs, PercentBidVerifierArgs, ReserveMemo,
+    auction_lock_p2_puzzle_hash, calculate_bps_payment,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,8 +42,9 @@ impl AuctionInfo {
         }
     }
 
-    /// Reconstructs a newly launched auction from its launcher memo.
-    pub fn from_memo(launcher_id: Bytes32, memo: AuctionMemo) -> Self {
+    /// Reconstructs a newly launched auction from its launcher memo, and the royalty info of the NFT
+    /// at the memo's NFT coin ID.
+    pub fn from_memo(launcher_id: Bytes32, memo: AuctionMemo, nft_royalty: RoyaltyInfo) -> Self {
         let lock_puzzle_hash = auction_lock_p2_puzzle_hash(launcher_id);
 
         let reserve = match memo.reserve {
@@ -65,12 +66,8 @@ impl AuctionInfo {
         Self::new(
             launcher_id,
             memo.settings,
-            memo.nft.coin_id,
-            RoyaltyInfo::new(
-                memo.nft.launcher_id,
-                memo.nft.royalty_puzzle_hash,
-                memo.nft.royalty_basis_points,
-            ),
+            memo.nft_coin_id,
+            nft_royalty,
             AuctionState::initial(memo.settings.payments.payout_puzzle_hash),
             reserve,
         )
@@ -92,12 +89,7 @@ impl AuctionInfo {
 
         AuctionMemo {
             settings: self.settings,
-            nft: NftMemo {
-                coin_id: self.nft_coin_id,
-                launcher_id: self.nft_royalty.launcher_id,
-                royalty_puzzle_hash: self.nft_royalty.puzzle_hash,
-                royalty_basis_points: self.nft_royalty.basis_points,
-            },
+            nft_coin_id: self.nft_coin_id,
             reserve,
         }
     }

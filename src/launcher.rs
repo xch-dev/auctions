@@ -4,8 +4,8 @@ use chia_wallet_sdk::{
 };
 
 use crate::{
-    Auction, AuctionError, AuctionInfo, AuctionReserve, AuctionSettings, AuctionState,
-    validate_auction,
+    AUCTION_SINGLETON_AMOUNT, Auction, AuctionError, AuctionInfo, AuctionReserve, AuctionSettings,
+    AuctionState, validate_auction,
 };
 
 pub trait AuctionLauncherExt {
@@ -44,6 +44,12 @@ impl AuctionLauncherExt for Launcher {
         );
 
         validate_auction(&info)?;
+
+        if self.singleton_amount() != AUCTION_SINGLETON_AMOUNT {
+            return Err(AuctionError::InvalidSingletonAmount(
+                self.singleton_amount(),
+            ));
+        }
 
         let (conditions, coin) = self.spend(ctx, info.inner_puzzle_hash().into(), info.memo())?;
 

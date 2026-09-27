@@ -21,7 +21,7 @@ pub use info::*;
 pub use launcher::*;
 pub use memo::*;
 pub use p2::*;
-pub use parser::parse_auction_launch;
+pub use parser::*;
 pub use types::*;
 pub use unlockers::*;
 

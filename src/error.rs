@@ -24,6 +24,6 @@ pub enum AuctionError {
     #[error("the launched singleton doesn't match the auction memo")]
     PuzzleHashMismatch,
 
-    #[error("the launched singleton has an even amount of {0}, so it can never be spent")]
-    EvenSingletonAmount(u64),
+    #[error("the auction singleton has an amount of {0}, but it must be 1")]
+    InvalidSingletonAmount(u64),
 }

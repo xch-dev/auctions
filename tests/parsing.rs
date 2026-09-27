@@ -11,11 +11,20 @@ fn launcher_spend(h: &Harness, launcher_id: Bytes32) -> Result<CoinSpend> {
         .ok_or(anyhow!("missing launcher spend"))
 }
 
-/// Parses the auction launcher with a modified launcher solution.
+/// Parses the auction launcher with a modified launcher solution, and the locked NFT's royalty.
 fn parse_modified(
     h: &mut Harness,
     modify: impl FnOnce(&mut LauncherSolution<AuctionMemo>),
-) -> Result<Option<Auction>, AuctionError> {
+) -> Result<Auction, AuctionError> {
+    let royalty = nft_royalty(&h.nft);
+    parse_with_royalty(h, modify, royalty)
+}
+
+fn parse_with_royalty(
+    h: &mut Harness,
+    modify: impl FnOnce(&mut LauncherSolution<AuctionMemo>),
+    royalty: RoyaltyInfo,
+) -> Result<Auction, AuctionError> {
     let spend = launcher_spend(h, h.auction.info.launcher_id).unwrap();
     let solution = spend.solution.to_clvm(&mut h.ctx).unwrap();
     let mut solution = h
@@ -24,7 +33,9 @@ fn parse_modified(
         .unwrap();
     modify(&mut solution);
     let solution = h.ctx.alloc(&solution).unwrap();
-    parse_auction_launch(&h.ctx, spend.coin, solution)
+    AuctionLaunch::parse(&h.ctx, spend.coin, solution)
+        .expect("expected an auction launch")
+        .into_auction(royalty)
 }
 
 #[test]
@@ -53,7 +64,7 @@ fn ignores_other_launchers() -> Result<()> {
 
     let spend = launcher_spend(&h, h.nft.info.launcher_id)?;
     let solution = spend.solution.to_clvm(&mut h.ctx)?;
-    assert_eq!(parse_auction_launch(&h.ctx, spend.coin, solution)?, None);
+    assert_eq!(AuctionLaunch::parse(&h.ctx, spend.coin, solution), None);
 
     // The right memo, but not spent by a launcher
     let spend = launcher_spend(&h, h.auction.info.launcher_id)?;
@@ -63,10 +74,7 @@ fn ignores_other_launchers() -> Result<()> {
         h.seller.puzzle_hash,
         spend.coin.amount,
     );
-    assert_eq!(
-        parse_auction_launch(&h.ctx, not_a_launcher, solution)?,
-        None
-    );
+    assert_eq!(AuctionLaunch::parse(&h.ctx, not_a_launcher, solution), None);
 
     Ok(())
 }
@@ -81,12 +89,7 @@ fn rejects_memos_that_dont_match_the_singleton() -> Result<()> {
     assert!(matches!(result, Err(AuctionError::PuzzleHashMismatch)));
 
     let result = parse_modified(&mut h, |solution| {
-        solution.key_value_list.nft.coin_id = Bytes32::new([7; 32]);
-    });
-    assert!(matches!(result, Err(AuctionError::PuzzleHashMismatch)));
-
-    let result = parse_modified(&mut h, |solution| {
-        solution.key_value_list.nft.royalty_basis_points += 1;
+        solution.key_value_list.nft_coin_id = Bytes32::new([7; 32]);
     });
     assert!(matches!(result, Err(AuctionError::PuzzleHashMismatch)));
 
@@ -94,11 +97,30 @@ fn rejects_memos_that_dont_match_the_singleton() -> Result<()> {
 }
 
 #[test]
-fn rejects_even_singleton_amounts() -> Result<()> {
+fn rejects_royalties_that_dont_match_the_singleton() -> Result<()> {
     let mut h = Harness::new(Config::default())?;
 
-    let result = parse_modified(&mut h, |solution| solution.amount = 2);
-    assert!(matches!(result, Err(AuctionError::EvenSingletonAmount(2))));
+    // The royalty basis points are curried into the auction, so an NFT with a different royalty
+    // than the one the auction was launched with is rejected
+    let mut royalty = nft_royalty(&h.nft);
+    royalty.basis_points += 1;
+    let result = parse_with_royalty(&mut h, |_| {}, royalty);
+    assert!(matches!(result, Err(AuctionError::PuzzleHashMismatch)));
+
+    Ok(())
+}
+
+#[test]
+fn rejects_singleton_amounts_other_than_1() -> Result<()> {
+    let mut h = Harness::new(Config::default())?;
+
+    for amount in [2, 3] {
+        let result = parse_modified(&mut h, |solution| solution.amount = amount);
+        assert!(
+            matches!(result, Err(AuctionError::InvalidSingletonAmount(a)) if a == amount),
+            "{result:?}"
+        );
+    }
 
     Ok(())
 }

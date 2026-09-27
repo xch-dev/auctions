@@ -40,16 +40,19 @@ So each bidder locks up `bid + floor(bid * premium / 10000) + floor(bid * royalt
 
 ## Discovery
 
-The auction launcher's memo (`AuctionMemo`) contains everything needed to reconstruct the auction: its settings, the locked NFT's coin ID and royalty, and the reserve coin's parent (plus the asset ID, hidden puzzle hash, and lineage proof for CATs). The reserve is always an empty coin locked by the auction at launch, so nothing else is needed to find it.
+The auction launcher's memo (`AuctionMemo`) contains the auction's settings, the locked NFT's coin ID, and the reserve coin's parent (plus the asset ID, hidden puzzle hash, and lineage proof for CATs). The reserve is always an empty coin locked by the auction at launch, so nothing else is needed to find it. The NFT's royalty info is curried into the auction but isn't in the memo, so wallets fetch it from the NFT on the blockchain.
 
-- `parse_auction_launch` reconstructs an auction from its launcher spend. It returns `None` for launchers that aren't auctions, and an error for invalid auctions, including memos that don't match the launched singleton.
-- `AuctionExt::parse_child` follows an auction from one spend to the next, given the solution it was spent with.
+- `AuctionLaunch::parse` reads an auction's launcher spend. It returns `None` for launchers that aren't auctions.
+- `AuctionLaunch::into_auction` reconstructs the auction, given the royalty info of the NFT at `AuctionLaunch::nft_coin_id`. It returns an error for invalid auctions, and for auctions that don't match the launched singleton. That includes an NFT whose royalty basis points don't match the auction's, since they're curried in.
+- `AuctionExt::parse_child` follows an auction from one spend to the next, given the solution of a confirmed spend. It runs the action puzzles in the solution without checking them, so it must not be used on unconfirmed spends.
+
+Auctions must be launched with a singleton amount of 1, because the reserve finalizer always recreates the singleton with that amount.
 
 The reserve finalizer takes the reserve coin's parent from the singleton's solution, so any coin at the lock address with the reserve's amount (and asset, for CATs) can be spent as the reserve. The new reserve is the child of whichever coin was spent, which `parse_child` reads from the solution. Wallets should never find the reserve by following the previous reserve's children. This can't be used to take funds, since the spent coin must hold exactly the reserve amount and its outputs are fixed by the actions.
 
 ## Validation
 
-The puzzles can't prevent every misconfiguration on their own, so `parse_auction_launch` rejects invalid auctions. `launch_auction` runs the same checks, so that sellers can't launch an auction that wallets would reject:
+The puzzles can't prevent every misconfiguration on their own, so `AuctionLaunch::into_auction` rejects invalid auctions. `launch_auction` runs the same checks, but not the ones that are left to wallets below, so sellers are responsible for locking the NFT and reserve correctly:
 
 - The minimum bid and bid increment must be greater than 0.
 - The buyer's premium, commission, and NFT royalty can't exceed 10,000 basis points.
@@ -57,8 +60,8 @@ The puzzles can't prevent every misconfiguration on their own, so `parse_auction
 
 Some things can't be checked offline, so before bidding on an auction, wallets must also:
 
-- Check the locked NFT: its coin must be the auction's NFT coin ID and unspent, it must be locked by the auction (its p2 puzzle hash is `auction_lock_p2_puzzle_hash` of the launcher ID), and its royalty must match the auction's.
-- Check the reserve. The singleton trusts the reserve to output the conditions it asks for, so it must be locked by the auction, or it could keep the bids. `parse_auction_launch` always rebuilds the reserve at the lock address, so a parsed auction whose singleton matches its memo has a locked reserve. For CAT reserves, wallets must also check that the reserve's lineage is valid. The launcher memo's reserve doesn't need to exist before the first bid, since the first bidder can create an empty coin at the lock address and spend it as the reserve instead.
+- Check the locked NFT: its coin must be the auction's NFT coin ID and unspent, and it must be locked by the auction (its p2 puzzle hash is `auction_lock_p2_puzzle_hash` of the launcher ID). Its royalty info must be the one passed to `into_auction`.
+- Check the reserve. The singleton trusts the reserve to output the conditions it asks for, so it must be locked by the auction, or it could keep the bids. `into_auction` always rebuilds the reserve at the lock address, so a parsed auction whose singleton matches its memo has a locked reserve. For CAT reserves, wallets must also check that the reserve's lineage is valid. The launcher memo's reserve doesn't need to exist before the first bid, since the first bidder can create an empty coin at the lock address and spend it as the reserve instead.
 - Show the timings to the user. They aren't limited, so an auction could end far in the future, or have a grace period so long that it never ends in practice once it has a bid.
 
 ## Competing Bids

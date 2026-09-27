@@ -225,8 +225,10 @@ impl Harness {
             .coin_spend(auction.info.launcher_id)
             .ok_or(anyhow!("missing launcher spend"))?;
         let launcher_solution = launcher_spend.solution.to_clvm(&mut ctx)?;
-        let parsed = parse_auction_launch(&ctx, launcher_spend.coin, launcher_solution)?;
-        assert_eq!(parsed, Some(auction));
+        let launch = AuctionLaunch::parse(&ctx, launcher_spend.coin, launcher_solution)
+            .ok_or(anyhow!("launcher isn't for an auction"))?;
+        assert_eq!(launch.nft_coin_id(), locked_nft.coin.coin_id());
+        assert_eq!(launch.into_auction(nft_royalty(&locked_nft))?, auction);
 
         Ok(Self {
             sim,
@@ -491,6 +493,15 @@ pub fn assert_mempool_valid(coin_spends: &[CoinSpend]) -> Result<()> {
     )
     .map_err(|error| anyhow!("mempool validation failed: {error:?}"))?;
     Ok(())
+}
+
+/// The royalty info a wallet would fetch from the NFT on the blockchain.
+pub fn nft_royalty(nft: &Nft) -> RoyaltyInfo {
+    RoyaltyInfo::new(
+        nft.info.launcher_id,
+        nft.info.royalty_puzzle_hash,
+        nft.info.royalty_basis_points,
+    )
 }
 
 pub fn fee(amount: u64, bps: u64) -> u64 {
