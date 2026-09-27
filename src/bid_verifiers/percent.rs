@@ -1,5 +1,7 @@
 use chia_wallet_sdk::prelude::*;
 
+use crate::include_puzzle;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ToClvm, FromClvm)]
 #[clvm(curry)]
 pub struct PercentBidVerifierArgs {
@@ -16,7 +18,7 @@ impl PercentBidVerifierArgs {
     }
 }
 
-compile_rue!(
-    debug PercentBidVerifierArgs = PERCENT_BID_VERIFIER,
+include_puzzle!(
+    PercentBidVerifierArgs = PERCENT_BID_VERIFIER,
     "puzzles/bid_verifiers/percent_bid_verifier.rue"
 );

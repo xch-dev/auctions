@@ -3,16 +3,21 @@ use chia_wallet_sdk::{
     prelude::*,
 };
 
-use crate::{Auction, AuctionInfo, AuctionMemo, AuctionReserve, AuctionSettings, AuctionState};
+use crate::{
+    AUCTION_SINGLETON_AMOUNT, Auction, AuctionError, AuctionInfo, AuctionReserve, AuctionSettings,
+    AuctionState, validate_auction,
+};
 
 pub trait AuctionLauncherExt {
+    /// Launches an auction for `nft`, which must already be locked by the auction (its p2 puzzle hash
+    /// must be [`auction_lock_p2_puzzle_hash`](crate::auction_lock_p2_puzzle_hash) of the launcher).
     fn launch_auction(
         self,
         ctx: &mut SpendContext,
         settings: AuctionSettings,
         reserve: AuctionReserve,
         nft: &Nft,
-    ) -> Result<(Conditions, Auction), DriverError>;
+    ) -> Result<(Conditions, Auction), AuctionError>;
 }
 
 impl AuctionLauncherExt for Launcher {
@@ -22,7 +27,7 @@ impl AuctionLauncherExt for Launcher {
         settings: AuctionSettings,
         reserve: AuctionReserve,
         nft: &Nft,
-    ) -> Result<(Conditions, Auction), DriverError> {
+    ) -> Result<(Conditions, Auction), AuctionError> {
         let launcher_coin = self.coin();
 
         let info = AuctionInfo::new(
@@ -38,11 +43,15 @@ impl AuctionLauncherExt for Launcher {
             reserve,
         );
 
-        let (conditions, coin) = self.spend(
-            ctx,
-            info.inner_puzzle_hash().into(),
-            AuctionMemo { settings },
-        )?;
+        validate_auction(&info)?;
+
+        if self.singleton_amount() != AUCTION_SINGLETON_AMOUNT {
+            return Err(AuctionError::InvalidSingletonAmount(
+                self.singleton_amount(),
+            ));
+        }
+
+        let (conditions, coin) = self.spend(ctx, info.inner_puzzle_hash().into(), info.memo())?;
 
         let proof = Proof::Eve(EveProof {
             parent_parent_coin_info: launcher_coin.parent_coin_info,

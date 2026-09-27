@@ -1,24 +1,32 @@
 import super::shared::*;
 
-fn main(SETTLEMENT_PUZZLE_HASH: Bytes32 | nil, Truth: Bid, nft_amount: Int) -> List<NftCondition> {
+fn main(
+    SETTLEMENT_PUZZLE_HASH: Bytes32,
+    ROYALTY_BPS: Int,
+    Truth: Bid,
+    nft_amount: Int,
+) -> List<NftCondition> {
     [
+        // The amount comes from the solution, so it must match the NFT coin
+        AssertMyAmount { amount: nft_amount },
+
         CreateCoin {
             puzzle_hash: Truth.puzzle_hash,
             amount: nft_amount,
             memos: Memos { value: [Truth.puzzle_hash] },
         },
 
-        ...inline if SETTLEMENT_PUZZLE_HASH is nil {
-            nil
-        } else {
-            [TransferNft {
-                launcher_id: nil,
-                trade_prices: [TradePrice {
-                    amount: Truth.amount,
-                    puzzle_hash: unchecked_cast::<Bytes32>(SETTLEMENT_PUZZLE_HASH),
-                }],
-                singleton_inner_puzzle_hash: nil,
-            }]
+        // Always transfer, so that the DID owner is cleared. The trade price is only included if there's
+        // a royalty to pay, since the NFT would otherwise assert a payment of 0, which the settlement
+        // puzzle can't make.
+        TransferNft {
+            launcher_id: nil,
+            trade_prices: inline if calculate_bps_amount(Truth.amount, ROYALTY_BPS) == 0 {
+                []
+            } else {
+                [TradePrice { amount: Truth.amount, puzzle_hash: SETTLEMENT_PUZZLE_HASH }]
+            },
+            singleton_inner_puzzle_hash: nil,
         },
     ]
 }
