@@ -1,17 +1,19 @@
 use chia_wallet_sdk::prelude::*;
 
-use crate::Bid;
+use crate::{Bid, include_puzzle};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ToClvm, FromClvm)]
 #[clvm(curry)]
 pub struct NftUnlockerArgs {
-    pub settlement_puzzle_hash: Option<Bytes32>,
+    pub settlement_puzzle_hash: Bytes32,
+    pub royalty_bps: u64,
 }
 
 impl NftUnlockerArgs {
-    pub fn new(settlement_puzzle_hash: Option<Bytes32>) -> Self {
+    pub fn new(settlement_puzzle_hash: Bytes32, royalty_bps: u64) -> Self {
         Self {
             settlement_puzzle_hash,
+            royalty_bps,
         }
     }
 }
@@ -32,7 +34,7 @@ impl NftUnlockerSolution {
     }
 }
 
-compile_rue!(
-    debug NftUnlockerArgs = NFT_UNLOCKER,
+include_puzzle!(
+    NftUnlockerArgs = NFT_UNLOCKER,
     "puzzles/unlockers/nft_unlocker.rue"
 );

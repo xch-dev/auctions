@@ -1,5 +1,7 @@
 use chia_wallet_sdk::prelude::*;
 
+use crate::include_puzzle;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ToClvm, FromClvm)]
 #[clvm(curry)]
 pub struct FlatBidVerifierArgs {
@@ -13,7 +15,7 @@ impl FlatBidVerifierArgs {
     }
 }
 
-compile_rue!(
-    debug FlatBidVerifierArgs = FLAT_BID_VERIFIER,
+include_puzzle!(
+    FlatBidVerifierArgs = FLAT_BID_VERIFIER,
     "puzzles/bid_verifiers/flat_bid_verifier.rue"
 );

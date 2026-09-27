@@ -9,24 +9,41 @@ struct Solution {
 fn main(
     BID_VERIFIER: BidVerifier,
     TIMINGS: Timings,
-    TOTAL_BPS: Int,
+    BUYERS_PREMIUM_BPS: Int,
+    ROYALTY_BPS: Int,
     Truth: AuctionStateTruth,
     ...{ bid, grace }: Solution,
 ) -> Output {
+    // The bid is stored in the curried state, which must be canonical so that it can be reproduced
+    // from the parsed values. Arithmetic always outputs canonical integers, so this strips any
+    // redundant leading zeros from the amount.
+    let bid = Bid { amount: bid.amount + 0, puzzle_hash: bid.puzzle_hash };
+
     let old_bid = inline if Truth.state.winning_bid.amount == 0 {
         nil
     } else {
         Truth.state.winning_bid
     };
 
-    assert BID_VERIFIER(old_bid, bid);
+    // The bid comes from the solution, so its puzzle hash must be checked at runtime. Otherwise a
+    // malformed puzzle hash would make every future refund and the NFT transfer invalid.
+    //
+    // Bids must strictly increase regardless of the verifier. Since the initial winning bid amount
+    // is 0, this also ensures that every bid is positive.
+    assert !Truth.state.ended
+        & (bid.puzzle_hash.length == 32)
+        & (bid.amount > Truth.state.winning_bid.amount)
+        & BID_VERIFIER(old_bid, bid);
+
+    // The premium and royalty are rounded separately so that the reserve holds exactly what the end
+    // action pays out. This matters for CAT reserves, since the CAT ring must balance exactly.
+    let reserve_amount = bid.amount
+        + calculate_bps_amount(bid.amount, BUYERS_PREMIUM_BPS)
+        + calculate_bps_amount(bid.amount, ROYALTY_BPS);
 
     Output {
         new_truth: AuctionStateTruth {
-            state: AuctionState {
-                reserve_amount: bid.amount + calculate_bps_amount(bid.amount, TOTAL_BPS),
-                winning_bid: bid,
-            },
+            state: AuctionState { reserve_amount, ended: false, winning_bid: bid },
             ephemeral_state: Truth.ephemeral_state,
         },
         conditions: [

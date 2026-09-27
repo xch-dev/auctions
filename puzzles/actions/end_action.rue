@@ -14,22 +14,30 @@ fn main(
     UNLOCKER: fn(Truth: Bid, ...solution: Any) -> List<NftCondition>,
     TIMINGS: Timings,
     PAYMENTS: Payments,
+    ROYALTY_BPS: Int,
+    // The inner puzzle hash of the settlement coin, which is wrapped by the CAT layer for CAT reserves
+    SETTLEMENT_PAYMENT_HASH: Bytes32,
     NFT_COIN_ID: Bytes32,
-    SETTLEMENT_PAYMENT_HASH: Bytes32 | nil,
     Truth: AuctionStateTruth,
     ...{ unlocker_solution }: Solution,
 ) -> Output {
-    let buyers_premium = calculate_bps_amount(
-        Truth.state.winning_bid.amount,
-        PAYMENTS.buyers_premium.bps,
-    );
-    let commission = calculate_bps_amount(Truth.state.winning_bid.amount, PAYMENTS.commission.bps);
-    let payout = Truth.state.winning_bid.amount - commission;
+    // The NFT can only be unlocked once, so a second end would lock up any funds bid after it
+    assert !Truth.state.ended;
+
+    let bid_amount = Truth.state.winning_bid.amount;
+    let buyers_premium = calculate_bps_amount(bid_amount, PAYMENTS.buyers_premium.bps);
+    let commission = calculate_bps_amount(bid_amount, PAYMENTS.commission.bps);
+    let royalty = calculate_bps_amount(bid_amount, ROYALTY_BPS);
+    let payout = bid_amount - commission;
     let unlock_conditions = UNLOCKER(Truth.state.winning_bid, ...unlocker_solution);
 
     Output {
         new_truth: AuctionStateTruth {
-            state: AuctionState { reserve_amount: 0, winning_bid: Truth.state.winning_bid },
+            state: AuctionState {
+                reserve_amount: 0,
+                ended: true,
+                winning_bid: Truth.state.winning_bid,
+            },
             ephemeral_state: Truth.ephemeral_state,
         },
         conditions: [
@@ -72,14 +80,15 @@ fn main(
                 Remark {}
             },
 
-            // Create an ephemeral settlement coin used to pay the NFT royalty
-            inline if SETTLEMENT_PAYMENT_HASH is nil {
+            // Fund an ephemeral settlement coin, which pays the NFT royalty that the NFT asserts.
+            // The settlement puzzle can't make a payment of 0, so it's skipped if there's no royalty.
+            inline if royalty == 0 {
                 Remark {}
             } else {
                 ReserveCondition {
                     condition: CreateCoin {
-                        puzzle_hash: unchecked_cast::<Bytes32>(SETTLEMENT_PAYMENT_HASH),
-                        amount: 0,
+                        puzzle_hash: SETTLEMENT_PAYMENT_HASH,
+                        amount: royalty,
                         memos: nil,
                     },
                 }

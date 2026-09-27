@@ -3,8 +3,9 @@ use chia_wallet_sdk::{
         offer::{NotarizedPayment, Payment, SettlementPaymentsSolution},
         singleton::SingletonSolution,
     },
+    clvm_traits::{clvm_list, clvm_quote},
     clvmr::serde::node_from_bytes,
-    driver::{ActionLayer, ActionLayerSolution, Finalizer, SingletonLayer, calculate_nft_royalty},
+    driver::{ActionLayer, ActionLayerSolution, Finalizer, Layer, SingletonLayer},
     prelude::*,
     puzzles::SETTLEMENT_PAYMENT_HASH,
     types::puzzles::{
@@ -13,12 +14,22 @@ use chia_wallet_sdk::{
 };
 
 use crate::{
-    AuctionInfo, AuctionReserve, AuctionState, Bid, BidActionArgs, BidActionSolution,
-    EndActionArgs, EndActionSolution, NftUnlockerArgs, NftUnlockerSolution, calculate_bps_payment,
+    AuctionInfo, AuctionReserve, AuctionState, Bid, BidActionSolution, NftUnlockerSolution,
     spend_auction_lock,
 };
 
 pub type Auction = Singleton<AuctionInfo>;
+
+const RESERVE_CONDITION_OPCODE: i64 = -42;
+
+#[derive(Debug, Clone)]
+pub struct AuctionChildState {
+    pub state: AuctionState,
+    /// The conditions output by the reserve coin, including the creation of the new reserve.
+    pub reserve_conditions: Vec<NodePtr>,
+    /// The amount of the ephemeral settlement coin that pays the NFT royalty, if one is created.
+    pub royalty_amount: Option<u64>,
+}
 
 pub trait AuctionExt: Sized {
     fn spend_bid_action(
@@ -28,15 +39,21 @@ pub trait AuctionExt: Sized {
         grace: bool,
     ) -> Result<Spend, DriverError>;
 
+    /// Ends the auction. `nft` is the locked NFT, which must be unlocked with
+    /// [`unlock_nft`](AuctionExt::unlock_nft) in the same spend bundle.
     fn spend_end_action(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Spend, DriverError>;
 
+    /// Spends the locked NFT to the winning bidder. This must be included in the same spend bundle as
+    /// the end action, and `self` must be the auction before it's ended.
     fn unlock_nft(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Nft, DriverError>;
 
+    /// Runs the action puzzles to determine the next state and the reserve coin's conditions, exactly
+    /// as the action layer and reserve finalizer will on chain.
     fn child_state(
         &self,
         ctx: &mut SpendContext,
         action_spends: &[Spend],
-    ) -> Result<(Conditions, AuctionState), DriverError>;
+    ) -> Result<AuctionChildState, DriverError>;
 
     fn spend(
         self,
@@ -44,6 +61,10 @@ pub trait AuctionExt: Sized {
         action_spends: Vec<Spend>,
         other_cat_spends: Vec<CatSpend>,
     ) -> Result<Self, DriverError>;
+
+    /// Parses the child of this auction, given the solution this auction's coin was spent with on
+    /// the blockchain.
+    fn parse_child(&self, ctx: &mut SpendContext, solution: NodePtr) -> Result<Self, DriverError>;
 }
 
 impl AuctionExt for Auction {
@@ -60,27 +81,25 @@ impl AuctionExt for Auction {
 
     fn spend_end_action(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Spend, DriverError> {
         let puzzle = self.info.end_action(ctx)?;
-        let solution = ctx.alloc(&EndActionSolution::new(nft.coin.amount))?;
+        // The end action passes its solution to the unlocker after the winning bid
+        let solution = ctx.alloc(&clvm_list!(nft.coin.amount))?;
         Ok(Spend::new(puzzle, solution))
     }
 
     fn unlock_nft(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Nft, DriverError> {
-        let unlocker = ctx.curry(NftUnlockerArgs::new(
-            (self.info.nft_royalty.basis_points > 0)
-                .then(|| self.info.reserve.settlement_puzzle_hash()),
-        ))?;
+        let unlocker = self.info.nft_unlocker(ctx)?;
         let unlocker_solution = ctx.alloc(&NftUnlockerSolution::new(
             self.info.state.winning_bid,
             nft.coin.amount,
         ))?;
         let conditions = ctx.run(unlocker, unlocker_solution)?;
-        let conditions = ctx.extract::<Vec<Condition>>(conditions)?.into();
+        let delegated_puzzle = ctx.alloc(&clvm_quote!(conditions))?;
 
         let spend = spend_auction_lock(
             ctx,
             self.info.launcher_id,
             self.info.inner_puzzle_hash(),
-            conditions,
+            Spend::new(delegated_puzzle, NodePtr::NIL),
         )?;
 
         nft.spend(ctx, spend)
@@ -90,101 +109,57 @@ impl AuctionExt for Auction {
         &self,
         ctx: &mut SpendContext,
         action_spends: &[Spend],
-    ) -> Result<(Conditions, AuctionState), DriverError> {
-        let mut reserve_conditions = Conditions::new();
+    ) -> Result<AuctionChildState, DriverError> {
         let mut state = self.info.state;
+        let mut truth = ctx.alloc(&(NodePtr::NIL, state))?;
+        let mut reserve_conditions = Vec::new();
+        let mut royalty_amount = None;
 
         for action_spend in action_spends {
-            let puzzle = Puzzle::parse(ctx, action_spend.puzzle);
+            let solution = ctx.alloc(&(truth, action_spend.solution))?;
+            let output = ctx.run(action_spend.puzzle, solution)?;
+            let (new_truth, conditions) = ctx.extract::<(NodePtr, Vec<NodePtr>)>(output)?;
+            let (_, new_state) = ctx.extract::<(NodePtr, AuctionState)>(new_truth)?;
 
-            if puzzle.mod_hash() == BidActionArgs::<NodePtr>::mod_hash() {
-                let solution = ctx.extract::<BidActionSolution>(action_spend.solution)?;
+            // The reserve finalizer collects each action's reserve conditions in reverse order
+            let mut action_reserve_conditions = Vec::new();
 
-                if state.winning_bid.amount > 0 {
-                    let hint = ctx.hint(state.winning_bid.puzzle_hash)?;
-                    reserve_conditions.push(CreateCoin::new(
-                        state.winning_bid.puzzle_hash,
-                        state.reserve_amount,
-                        hint,
-                    ));
+            for condition in conditions.into_iter().rev() {
+                let (opcode, condition) = ctx.extract::<(i64, NodePtr)>(condition)?;
+
+                if opcode == RESERVE_CONDITION_OPCODE {
+                    action_reserve_conditions.push(condition);
                 }
-
-                state.winning_bid = solution.bid;
-                state.reserve_amount = solution.bid.amount
-                    + calculate_bps_payment(
-                        solution.bid.amount,
-                        self.info.settings.payments.buyers_premium.bps
-                            + u64::from(self.info.nft_royalty.basis_points),
-                    );
-            } else if puzzle.mod_hash() == EndActionArgs::<NodePtr>::mod_hash() {
-                let buyers_premium = self.info.settings.payments.buyers_premium;
-                let commission = self.info.settings.payments.commission;
-                let payout_puzzle_hash = self.info.settings.payments.payout_puzzle_hash;
-
-                let buyers_premium_amount =
-                    calculate_bps_payment(state.winning_bid.amount, buyers_premium.bps);
-
-                let commission_amount =
-                    calculate_bps_payment(state.winning_bid.amount, commission.bps);
-
-                let payout_amount = state.winning_bid.amount - commission_amount;
-
-                if buyers_premium_amount > 0 {
-                    reserve_conditions.push(CreateCoin::new(
-                        buyers_premium.puzzle_hash,
-                        buyers_premium_amount,
-                        ctx.hint(buyers_premium.puzzle_hash)?,
-                    ));
-                } else {
-                    reserve_conditions.push(Remark::new(NodePtr::NIL));
-                }
-
-                if commission_amount > 0 {
-                    reserve_conditions.push(CreateCoin::new(
-                        commission.puzzle_hash,
-                        commission_amount,
-                        ctx.hint(commission.puzzle_hash)?,
-                    ));
-                } else {
-                    reserve_conditions.push(Remark::new(NodePtr::NIL));
-                }
-
-                if payout_amount > 0 {
-                    reserve_conditions.push(CreateCoin::new(
-                        payout_puzzle_hash,
-                        payout_amount,
-                        ctx.hint(payout_puzzle_hash)?,
-                    ));
-                } else {
-                    reserve_conditions.push(Remark::new(NodePtr::NIL));
-                }
-
-                if self.info.nft_royalty.basis_points > 0 {
-                    reserve_conditions.push(CreateCoin::new(
-                        SETTLEMENT_PAYMENT_HASH.into(),
-                        0,
-                        Memos::None,
-                    ));
-                }
-
-                state.reserve_amount = 0;
             }
+
+            // Only the end action pays the royalty. A bid refund can also be sent to the settlement
+            // puzzle hash, if that's the puzzle hash the bidder chose.
+            if new_state.ended && !state.ended {
+                for &condition in &action_reserve_conditions {
+                    if let Ok(create_coin) = ctx.extract::<CreateCoin<NodePtr>>(condition)
+                        && create_coin.puzzle_hash == SETTLEMENT_PAYMENT_HASH.into()
+                    {
+                        royalty_amount = Some(create_coin.amount);
+                    }
+                }
+            }
+
+            reserve_conditions.extend(action_reserve_conditions);
+            truth = new_truth;
+            state = new_state;
         }
 
-        let mut reserve_conditions = reserve_conditions.into_iter().collect::<Vec<_>>();
+        let p2_puzzle_hash = self.info.reserve.p2_puzzle_hash();
+        let hint = ctx.hint(p2_puzzle_hash)?;
+        let new_reserve =
+            ctx.alloc(&CreateCoin::new(p2_puzzle_hash, state.reserve_amount, hint))?;
+        reserve_conditions.insert(0, new_reserve);
 
-        reserve_conditions.reverse();
-
-        reserve_conditions.insert(
-            0,
-            Condition::CreateCoin(CreateCoin::new(
-                self.info.reserve.p2_puzzle_hash(),
-                state.reserve_amount,
-                ctx.hint(self.info.reserve.p2_puzzle_hash())?,
-            )),
-        );
-
-        Ok((reserve_conditions.into(), state))
+        Ok(AuctionChildState {
+            state,
+            reserve_conditions,
+            royalty_amount,
+        })
     }
 
     fn spend(
@@ -194,23 +169,25 @@ impl AuctionExt for Auction {
         mut other_cat_spends: Vec<CatSpend>,
     ) -> Result<Self, DriverError> {
         let merkle_tree = self.info.merkle_tree();
-        let settles_royalty = self.info.nft_royalty.basis_points > 0
-            && action_spends.iter().any(|spend| {
-                Puzzle::parse(ctx, spend.puzzle).mod_hash() == EndActionArgs::<NodePtr>::mod_hash()
-            });
 
-        let royalty_payment = if settles_royalty {
-            let amount = calculate_nft_royalty(
-                self.info.state.winning_bid.amount,
-                self.info.nft_royalty.basis_points,
-            );
-            Some(NotarizedPayment::new(
-                self.info.nft_royalty.launcher_id,
-                vec![Payment::new(
-                    self.info.nft_royalty.puzzle_hash,
-                    amount,
-                    ctx.hint(self.info.nft_royalty.puzzle_hash)?,
-                )],
+        let AuctionChildState {
+            state,
+            reserve_conditions,
+            royalty_amount,
+        } = self.child_state(ctx, &action_spends)?;
+
+        let royalty_payment = if let Some(amount) = royalty_amount {
+            let royalty_puzzle_hash = self.info.nft_royalty.puzzle_hash;
+            Some((
+                amount,
+                NotarizedPayment::new(
+                    self.info.nft_royalty.launcher_id,
+                    vec![Payment::new(
+                        royalty_puzzle_hash,
+                        amount,
+                        ctx.hint(royalty_puzzle_hash)?,
+                    )],
+                ),
             ))
         } else {
             None
@@ -245,8 +222,6 @@ impl AuctionExt for Auction {
             reserve_parent_id: self.info.reserve.coin().parent_coin_info,
         })?;
 
-        let (reserve_conditions, state) = self.child_state(ctx, &action_spends)?;
-
         let inner_spend = action_layer.construct_spend(
             ctx,
             ActionLayerSolution {
@@ -269,20 +244,22 @@ impl AuctionExt for Auction {
 
         ctx.insert(coin_spend);
 
+        let delegated_puzzle = ctx.alloc(&clvm_quote!(reserve_conditions))?;
+
         let reserve_spend = spend_auction_lock(
             ctx,
             self.info.launcher_id,
             self.info.inner_puzzle_hash(),
-            reserve_conditions,
+            Spend::new(delegated_puzzle, NodePtr::NIL),
         )?;
 
-        let new_reserve = match self.info.reserve {
+        match self.info.reserve {
             AuctionReserve::Xch(coin) => {
                 ctx.spend(coin, reserve_spend)?;
 
-                if let Some(royalty_payment) = royalty_payment {
+                if let Some((amount, royalty_payment)) = royalty_payment {
                     let settlement_coin =
-                        Coin::new(coin.coin_id(), SETTLEMENT_PAYMENT_HASH.into(), 0);
+                        Coin::new(coin.coin_id(), SETTLEMENT_PAYMENT_HASH.into(), amount);
                     let settlement_spend = SettlementLayer.construct_coin_spend(
                         ctx,
                         settlement_coin,
@@ -290,44 +267,53 @@ impl AuctionExt for Auction {
                     )?;
                     ctx.insert(settlement_spend);
                 }
-
-                AuctionReserve::Xch(Coin::new(
-                    coin.coin_id(),
-                    coin.puzzle_hash,
-                    state.reserve_amount,
-                ))
             }
             AuctionReserve::Cat(cat) => {
-                if let Some(royalty_payment) = royalty_payment {
+                if let Some((amount, royalty_payment)) = royalty_payment {
                     let settlement_spend = SettlementLayer.construct_spend(
                         ctx,
                         SettlementPaymentsSolution::new(vec![royalty_payment]),
                     )?;
                     other_cat_spends.push(CatSpend::new(
-                        cat.child(SETTLEMENT_PAYMENT_HASH.into(), 0),
+                        cat.child(SETTLEMENT_PAYMENT_HASH.into(), amount),
                         settlement_spend,
                     ));
                 }
 
-                let cat_spend = CatSpend::new(cat, reserve_spend);
-                other_cat_spends.push(cat_spend);
+                other_cat_spends.push(CatSpend::new(cat, reserve_spend));
                 Cat::spend_all(ctx, &other_cat_spends)?;
-                AuctionReserve::Cat(cat.child(cat.info.p2_puzzle_hash, state.reserve_amount))
             }
-        };
+        }
 
-        let child = self.child_with(
-            AuctionInfo::new(
-                self.info.launcher_id,
-                self.info.settings,
-                self.info.nft_coin_id,
-                self.info.nft_royalty,
-                state,
-                new_reserve,
-            ),
-            self.coin.amount,
-        );
-
-        Ok(child)
+        Ok(child_auction(&self, self.info.reserve, state))
     }
+
+    fn parse_child(&self, ctx: &mut SpendContext, solution: NodePtr) -> Result<Self, DriverError> {
+        let singleton_solution = SingletonSolution::<NodePtr>::from_clvm(ctx, solution)?;
+        let action_layer_solution = ActionLayer::<AuctionState, NodePtr>::parse_solution(
+            ctx,
+            singleton_solution.inner_solution,
+        )?;
+        let finalizer_solution =
+            ctx.extract::<ReserveFinalizerSolution>(action_layer_solution.finalizer_solution)?;
+        // Whoever spent the auction chose which coin to spend as the reserve, so it may not be the
+        // reserve we were tracking
+        let spent_reserve = self
+            .info
+            .reserve
+            .with_parent_coin_info(finalizer_solution.reserve_parent_id);
+        let child = self.child_state(ctx, &action_layer_solution.action_spends)?;
+        Ok(child_auction(self, spent_reserve, child.state))
+    }
+}
+
+fn child_auction(auction: &Auction, spent_reserve: AuctionReserve, state: AuctionState) -> Auction {
+    auction.child_with(
+        AuctionInfo {
+            state,
+            reserve: spent_reserve.child(state.reserve_amount),
+            ..auction.info
+        },
+        auction.coin.amount,
+    )
 }

@@ -7,6 +7,7 @@ export struct EphemeralState {}
 
 export struct AuctionState {
     reserve_amount: Int,
+    ended: Bool,
     ...winning_bid: Bid,
 }
 

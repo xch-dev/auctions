@@ -1,4 +1,4 @@
-use chia_wallet_sdk::{clvm_traits::apply_constants, prelude::*};
+use chia_wallet_sdk::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ToClvm, FromClvm)]
 #[clvm(list)]
@@ -79,20 +79,11 @@ pub enum BidVerifier {
     } = 1,
 }
 
-#[apply_constants]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ToClvm, FromClvm)]
-#[clvm(list)]
-pub struct AuctionMemo {
-    #[clvm(constant = 0)]
-    pub version: u8,
-    #[clvm(rest)]
-    pub settings: AuctionSettings,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ToClvm, FromClvm)]
 #[clvm(list)]
 pub struct AuctionState {
     pub reserve_amount: u64,
+    pub ended: bool,
     #[clvm(rest)]
     pub winning_bid: Bid,
 }
@@ -101,11 +92,16 @@ impl AuctionState {
     pub fn initial(p2_puzzle_hash: Bytes32) -> Self {
         Self {
             reserve_amount: 0,
+            ended: false,
             winning_bid: Bid::new(0, p2_puzzle_hash),
         }
     }
 }
 
-pub fn calculate_bps_payment(bid_amount: u64, bps: u64) -> u64 {
-    bid_amount * bps / 10000
+pub const MAX_BPS: u64 = 10_000;
+
+/// Rounds down, matching the puzzles. Returns [`None`] if the result doesn't fit in a [`u64`], which
+/// can only happen if `bps` is greater than [`MAX_BPS`].
+pub fn calculate_bps_payment(amount: u64, bps: u64) -> Option<u64> {
+    u64::try_from(u128::from(amount) * u128::from(bps) / u128::from(MAX_BPS)).ok()
 }
