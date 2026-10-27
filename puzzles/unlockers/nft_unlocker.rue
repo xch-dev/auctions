@@ -1,11 +1,8 @@
 import super::shared::*;
 
-fn main(
-    SETTLEMENT_PUZZLE_HASH: Bytes32,
-    ROYALTY_BPS: Int,
-    Truth: Bid,
-    nft_amount: Int,
-) -> List<NftCondition> {
+fn main(SETTLEMENT_PUZZLE_HASH: Bytes32, ROYALTY_BPS: Int, Truth: Bid, nft_amount: Int) -> List<
+    NftCondition,
+> {
     [
         // The amount comes from the solution, so it must match the NFT coin
         AssertMyAmount { amount: nft_amount },
