@@ -3,7 +3,7 @@ use chia_wallet_sdk::prelude::*;
 use crate::include_puzzle;
 
 /// The message the auction's payout puzzle must send to the auction coin to authorize a cancel.
-pub const CANCEL_MESSAGE: &[u8] = b"cancel";
+pub const CANCEL_MESSAGE: &[u8] = b"c";
 
 /// The message mode used to authorize a cancel, which commits to the sender's puzzle hash and the
 /// receiving auction coin.

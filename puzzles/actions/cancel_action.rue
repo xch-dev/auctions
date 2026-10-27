@@ -1,8 +1,9 @@
 import super::shared::*;
 
 // The message the payout puzzle must send to the auction coin to authorize a cancel. Since the
-// message is sent to a specific auction coin, it doesn't need to commit to anything else.
-inline const CANCEL_MESSAGE: Bytes = "cancel";
+// message is sent to a specific auction coin, it doesn't need to commit to anything else, so it's
+// kept to a single byte.
+inline const CANCEL_MESSAGE: Bytes = "c";
 
 struct Solution {
     ...unlocker_solution: Any,
@@ -46,6 +47,9 @@ fn main(
                 receiver: [NFT_COIN_ID],
                 message: tree_hash((1, unlock_conditions)),
             },
+
+            // Announce the end of the auction, the same as the end action does
+            CreateCoinAnnouncement { message: "$" },
         ],
     }
 }

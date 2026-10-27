@@ -5,15 +5,25 @@ use std::fmt::Debug;
 use anyhow::{Result, anyhow};
 use auction::*;
 use chia_wallet_sdk::{
-    chia::consensus::{
-        consensus_constants::TEST_CONSTANTS,
-        spendbundle_conditions::get_conditions_from_spendbundle,
+    chia::{
+        consensus::{
+            consensus_constants::TEST_CONSTANTS,
+            spendbundle_conditions::get_conditions_from_spendbundle,
+        },
+        puzzle_types::singleton::SingletonSolution,
     },
-    driver::IntermediateLauncher,
+    clvm_traits::clvm_quote,
+    clvmr::serde::node_from_bytes,
+    driver::{ActionLayer, ActionLayerSolution, Finalizer, IntermediateLauncher, SingletonLayer},
     prelude::*,
     puzzles::SETTLEMENT_PAYMENT_HASH,
-    test::BlsPairWithCoin,
-    types::announcement_id,
+    test::{BlsPairWithCoin, sign_transaction},
+    types::{
+        announcement_id,
+        puzzles::{
+            RESERVE_FINALIZER_DEFAULT_RESERVE_AMOUNT_FROM_STATE_PROGRAM, ReserveFinalizerSolution,
+        },
+    },
 };
 
 pub const PREMIUM_PUZZLE_HASH: Bytes32 = Bytes32::new([1; 32]);
@@ -364,18 +374,33 @@ impl Harness {
     /// Like [`Harness::cancel`], but the cancel message is sent by `authorizer`'s coin instead, or not
     /// at all.
     pub fn cancel_authorized_by(&mut self, authorizer: Option<BlsPairWithCoin>) -> Result<Nft> {
-        let result = self.try_cancel(authorizer);
+        let authorization = match authorizer {
+            Some(authorizer) => {
+                let conditions = self.auction.cancel_authorization(&mut self.ctx)?;
+                Some((authorizer, conditions))
+            }
+            None => None,
+        };
+        self.cancel_with_authorization(authorization)
+    }
+
+    /// Like [`Harness::cancel`], but the given coin outputs the given conditions in place of the
+    /// cancel authorization.
+    pub fn cancel_with_authorization(
+        &mut self,
+        authorization: Option<(BlsPairWithCoin, Conditions)>,
+    ) -> Result<Nft> {
+        let result = self.try_cancel(authorization);
         if result.is_err() {
             self.ctx.take();
         }
         result
     }
 
-    fn try_cancel(&mut self, authorizer: Option<BlsPairWithCoin>) -> Result<Nft> {
+    fn try_cancel(&mut self, authorization: Option<(BlsPairWithCoin, Conditions)>) -> Result<Nft> {
         let mut keys = Vec::new();
 
-        if let Some(authorizer) = authorizer {
-            let conditions = self.auction.cancel_authorization(&mut self.ctx)?;
+        if let Some((authorizer, conditions)) = authorization {
             StandardLayer::new(authorizer.pk).spend(&mut self.ctx, authorizer.coin, conditions)?;
             keys.push(authorizer.sk);
         }
@@ -390,6 +415,117 @@ impl Harness {
         self.confirmed(&coin_spends, auction)?;
         self.nft = nft;
         Ok(nft)
+    }
+
+    /// Spends the auction with `action_spends` like [`AuctionExt::spend`], along with any spends
+    /// already in the context, but without running the actions in the driver first. This makes sure
+    /// that invalid actions are rejected on chain, and not just by the driver. Only XCH reserves are
+    /// supported, and the reserve is recreated with `reserve_amount`.
+    pub fn spend_unchecked(
+        &mut self,
+        action_spends: Vec<Spend>,
+        reserve_amount: u64,
+        keys: &[SecretKey],
+    ) -> Result<()> {
+        let result = self.try_spend_unchecked(action_spends, reserve_amount, keys);
+        if result.is_err() {
+            self.ctx.take();
+        }
+        result
+    }
+
+    fn try_spend_unchecked(
+        &mut self,
+        action_spends: Vec<Spend>,
+        reserve_amount: u64,
+        keys: &[SecretKey],
+    ) -> Result<()> {
+        let info = self.auction.info;
+        let AuctionReserve::Xch(reserve) = info.reserve else {
+            return Err(anyhow!("only XCH reserves are supported"));
+        };
+
+        let reserve_amount_from_state_program = node_from_bytes(
+            &mut self.ctx,
+            &RESERVE_FINALIZER_DEFAULT_RESERVE_AMOUNT_FROM_STATE_PROGRAM,
+        )?;
+
+        let action_layer = ActionLayer::new(
+            info.merkle_tree().root(),
+            info.state,
+            Finalizer::Reserve {
+                reserve_full_puzzle_hash: reserve.puzzle_hash,
+                reserve_inner_puzzle_hash: info.reserve.p2_puzzle_hash(),
+                reserve_amount_from_state_program,
+                hint: info.launcher_id,
+            },
+        );
+
+        let action_spend_hashes = action_spends
+            .iter()
+            .map(|spend| self.ctx.tree_hash(spend.puzzle).into())
+            .collect::<Vec<_>>();
+        let proofs = action_layer
+            .get_proofs(&info.merkle_leaves(), &action_spend_hashes)
+            .ok_or(anyhow!("invalid merkle proof"))?;
+
+        let finalizer_solution = self.ctx.alloc(&ReserveFinalizerSolution {
+            reserve_parent_id: reserve.parent_coin_info,
+        })?;
+        let inner_spend = action_layer.construct_spend(
+            &mut self.ctx,
+            ActionLayerSolution {
+                proofs,
+                action_spends,
+                finalizer_solution,
+            },
+        )?;
+        let coin_spend = SingletonLayer::new(info.launcher_id, inner_spend.puzzle)
+            .construct_coin_spend(
+                &mut self.ctx,
+                self.auction.coin,
+                SingletonSolution {
+                    lineage_proof: self.auction.proof,
+                    amount: self.auction.coin.amount,
+                    inner_solution: inner_spend.solution,
+                },
+            )?;
+        self.ctx.insert(coin_spend);
+
+        let p2_puzzle_hash = info.reserve.p2_puzzle_hash();
+        let hint = self.ctx.hint(p2_puzzle_hash)?;
+        let new_reserve = CreateCoin::new(p2_puzzle_hash, reserve_amount, hint);
+        let delegated_puzzle = self.ctx.alloc(&clvm_quote!(vec![new_reserve]))?;
+        let reserve_spend = spend_auction_lock(
+            &mut self.ctx,
+            info.launcher_id,
+            info.inner_puzzle_hash(),
+            Spend::new(delegated_puzzle, NodePtr::NIL),
+        )?;
+        self.ctx.spend(reserve, reserve_spend)?;
+
+        // The simulator's signer runs every puzzle, so the auction's spend is left out of signing (it
+        // doesn't need a signature) to make sure it's only ever run by consensus validation
+        let coin_spends = self.ctx.take();
+        let auction_coin_id = self.auction.coin.coin_id();
+        let signed = coin_spends
+            .iter()
+            .filter(|coin_spend| coin_spend.coin.coin_id() != auction_coin_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let signature = sign_transaction(&signed, keys)?;
+        self.sim
+            .new_transaction(SpendBundle::new(coin_spends.clone(), signature))?;
+        assert_mempool_valid(&coin_spends)?;
+
+        let solution = self
+            .sim
+            .coin_spend(self.auction.coin.coin_id())
+            .ok_or(anyhow!("missing auction spend"))?
+            .solution
+            .to_clvm(&mut self.ctx)?;
+        self.auction = self.auction.parse_child(&mut self.ctx, solution)?;
+        Ok(())
     }
 
     /// A new empty coin owned by the seller, at the auction's payout address.

@@ -162,8 +162,8 @@ impl AuctionExt for Auction {
             }
 
             // Only the end action pays the royalty, and the cancel action never creates any reserve
-            // conditions. A bid refund can also be sent to the settlement
-            // puzzle hash, if that's the puzzle hash the bidder chose.
+            // conditions. A bid refund can also be sent to the settlement puzzle hash, if that's the
+            // puzzle hash the bidder chose.
             if new_state.ended && !state.ended {
                 for &condition in &action_reserve_conditions {
                     if let Ok(create_coin) = ctx.extract::<CreateCoin<NodePtr>>(condition)

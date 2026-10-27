@@ -34,7 +34,7 @@ Both the buyer's premium and commission are percentages, and are sent to a singl
 
 ## Cancelling
 
-The cancel action asserts that the auction hasn't ended and has no bids, and has no timing restrictions. It must be authorized by a coin at the payout address, which sends the message `cancel` to the current auction coin with the `SENDER_PUZZLE | RECEIVER_COIN` mode (`0x17`). Since the message is sent to a specific auction coin, it can't be reused once the auction has been spent. `AuctionExt::cancel_authorization` returns the condition that coin must output, and `AuctionExt::spend_cancel_action` builds the action, which must be spent along with `AuctionExt::unlock_nft` in the same spend bundle.
+The cancel action asserts that the auction hasn't ended and has no bids, and has no timing restrictions. It must be authorized by a coin at the payout address, which sends the message `c` to the current auction coin with the `SENDER_PUZZLE | RECEIVER_COIN` mode (`0x17`). Since the message is sent to a specific auction coin, it can't be reused once the auction has been spent. `AuctionExt::cancel_authorization` returns the condition that coin must output, and `AuctionExt::spend_cancel_action` builds the action, which must be spent along with `AuctionExt::unlock_nft` in the same spend bundle. Like the end action, the cancel action creates the coin announcement `$`, so a cancelled auction looks the same as one that ended with no bids.
 
 A cancel spends the auction coin, so it conflicts with a pending first bid in the mempool, and whichever confirms first wins. The auctioneer can't replace a pending bid with a cancel, since the bidder's coin asserts the bid's announcement.
 
@@ -85,7 +85,7 @@ Near the end time, this means that a bid landing in the last block can't be answ
 ## Trust Assumptions
 
 - **Revocable CATs:** The issuer of a revocable CAT can spend any coin of that CAT, including the reserve. If they revoke the reserve during an auction, they take the current winning bid, and the auction can never be ended, so the NFT is locked forever. Wallets should make it clear that the issuer is trusted when an auction's reserve is a revocable CAT.
-- **Payout address:** The payout address authorizes cancelling the auction before the first bid. If it's a puzzle that others can spend (or send messages from), they can cancel the auction too, which only returns the NFT to the payout address.
+- **Payout address:** The payout address authorizes cancelling the auction before the first bid. If it's a puzzle that others can spend (or send messages from), they can cancel the auction too, which only returns the NFT to the payout address. If it's a puzzle that can't send messages, such as a payment split, the auction can't be cancelled at all, and can only be ended.
 - **Grace period flag:** Each bidder's coin asserts an announcement of their bid (its amount and puzzle hash), but not whether it was placed using the grace period. Anyone relaying a pending bid can change that flag, which only changes when the bid is allowed to land. The bidder still pays exactly what they bid.
 
 ## Development
