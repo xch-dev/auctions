@@ -12,6 +12,8 @@ The life cycle of an auction is as follows:
 2. Until the auction is ended, anyone can place a bid as long as their bid is strictly higher than the current winning bid and meets certain requirements which can be specified by the auctioneer. The bidder locks up their bid plus the buyer's premium and NFT royalty, and the previous bidder is refunded everything they locked up. Multiple bids can be placed in a single spend.
 3. When the auction is ended, the NFT is sent to the highest bidder, the auctioneer receives the final bid amount minus the commission, and the buyer's premium, commission, and NFT royalty are paid out. If there were no bids, the NFT is sent back to the auctioneer. An auction can only be ended once, and no bids can be placed after it's ended.
 
+Until the first bid is placed, the auctioneer can also cancel the auction at any time, which sends the NFT back to them just like ending it with no bids. Once there's a bid, the auctioneer is committed and the auction can only be ended. A cancelled auction is ended, so it can't be bid on, ended, or cancelled again.
+
 ## Customization
 
 The following parameters can be customized by the auctioneer:
@@ -26,7 +28,17 @@ These can also be customized, but they may be enforced to be certain values by t
 - The buyer's premium
 - The commission
 
+The auctioneer can cancel the auction before the first bid, regardless of these settings. The cancel is authorized by the payout address, so whoever controls it can cancel.
+
 Both the buyer's premium and commission are percentages, and are sent to a single address. If these need to be split between multiple addresses, you should use something external to do so such as the [royalty split](https://splitxch.com/) primitive.
+
+## Cancelling
+
+The cancel action asserts that the auction hasn't ended and has no bids, and has no timing restrictions. It must be authorized by a coin at the payout address, which sends the message `c` to the current auction coin with the `SENDER_PUZZLE | RECEIVER_COIN` mode (`0x17`). Since the message is sent to a specific auction coin, it can't be reused once the auction has been spent. `AuctionExt::cancel_authorization` returns the condition that coin must output, and `AuctionExt::spend_cancel_action` builds the action, which must be spent along with `AuctionExt::unlock_nft` in the same spend bundle. Like the end action, the cancel action creates the coin announcement `$`, and leaves the auction in the same state as ending it with no bids. The spend itself still reveals that it was cancelled.
+
+A cancel spends the auction coin, so it conflicts with a pending first bid in the mempool, and whichever confirms first wins. The auctioneer can't replace a pending bid with a cancel, since the bidder's coin asserts the bid's announcement.
+
+Like ending an auction, a cancel must spend an empty coin at the lock address as the reserve. Any such coin works (see [Discovery](#discovery)), so if the launcher memo's reserve was never created, or a revocable CAT's issuer revoked it, the auctioneer has to create a new one first, and set `AuctionInfo::reserve` to it before spending the auction. For CAT reserves, this means the auctioneer needs to hold some of that CAT, since the new reserve must be a coin of the same asset.
 
 ## Fees and Royalties
 
@@ -75,6 +87,7 @@ Near the end time, this means that a bid landing in the last block can't be answ
 ## Trust Assumptions
 
 - **Revocable CATs:** The issuer of a revocable CAT can spend any coin of that CAT, including the reserve. If they revoke the reserve during an auction, they take the current winning bid, and the auction can never be ended, so the NFT is locked forever. Wallets should make it clear that the issuer is trusted when an auction's reserve is a revocable CAT.
+- **Payout address:** The payout address authorizes cancelling the auction before the first bid. If it's a puzzle that others can spend (or send messages from), they can cancel the auction too, which only returns the NFT to the payout address. If it's a puzzle that can't send messages, such as a payment split, the auction can't be cancelled at all, and can only be ended.
 - **Grace period flag:** Each bidder's coin asserts an announcement of their bid (its amount and puzzle hash), but not whether it was placed using the grace period. Anyone relaying a pending bid can change that flag, which only changes when the bid is allowed to land. The bidder still pays exactly what they bid.
 
 ## Development
