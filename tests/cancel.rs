@@ -235,15 +235,25 @@ fn unchecked_cancel_without_bids_succeeds() -> Result<()> {
 
 #[test]
 fn cancel_after_a_bid_is_rejected_on_chain() -> Result<()> {
-    let mut h = Harness::new(Config::default())?;
-    let winner = h.bid(100)?;
+    // Without a royalty, the NFT's transfer doesn't assert a royalty payment, so nothing but the
+    // cancel action's own check stops a cancel from sending the NFT to the bidder and burning the
+    // reserve as fees
+    for royalty_bps in [0, 500] {
+        let mut h = Harness::new(Config {
+            royalty_bps,
+            ..Config::default()
+        })?;
+        let winner = h.bid(100)?;
 
-    let (cancel, key) = authorized_cancel(&mut h)?;
-    let _ = h.auction.unlock_nft(&mut h.ctx, &h.nft)?;
-    let result = h.spend_unchecked(vec![cancel], 0, &[key]);
-    assert_fails_with(result, PUZZLE_RAISED);
+        let (cancel, key) = authorized_cancel(&mut h)?;
+        let _ = h.auction.unlock_nft(&mut h.ctx, &h.nft)?;
+        let result = h.spend_unchecked(vec![cancel], 0, &[key]);
+        assert_fails_with(result, PUZZLE_RAISED);
 
-    assert_eq!(h.auction.info.state.winning_bid, winner.bid);
+        assert_eq!(h.auction.info.state.winning_bid, winner.bid);
+        h.assert_unspent(h.auction.info.reserve.coin());
+    }
+
     Ok(())
 }
 
@@ -299,6 +309,51 @@ fn cancel_cannot_be_combined_with_other_actions() -> Result<()> {
         };
         let result = h.spend_unchecked(actions, 0, &[key]);
         assert_fails_with(result, PUZZLE_RAISED);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn two_cancels_in_one_spend_are_rejected() -> Result<()> {
+    let mut h = Harness::new(Config::default())?;
+
+    // Each cancel has its own authorization, so only the second cancel's check can reject it
+    let (first, first_key) = authorized_cancel(&mut h)?;
+    let (second, second_key) = authorized_cancel(&mut h)?;
+    let _ = h.auction.unlock_nft(&mut h.ctx, &h.nft)?;
+    let result = h.spend_unchecked(vec![first, second], 0, &[first_key, second_key]);
+    assert_fails_with(result, PUZZLE_RAISED);
+
+    Ok(())
+}
+
+#[test]
+fn cancel_can_spend_a_stand_in_reserve() -> Result<()> {
+    // If the launcher's reserve is missing, the seller can create an empty coin at the lock address
+    // and spend it as the reserve instead. For CAT reserves, this needs a coin of the same CAT.
+    for reserve in [
+        ReserveKind::Xch,
+        ReserveKind::Cat,
+        ReserveKind::RevocableCat,
+    ] {
+        let mut h = Harness::new(Config {
+            reserve,
+            ..Config::default()
+        })?;
+
+        let tracked = h.auction.info.reserve;
+        let stand_in = h.decoy_reserve()?;
+        h.auction.info.reserve = stand_in;
+
+        // The harness checks that parse_child follows the stand-in reserve
+        let nft = h.cancel()?;
+        assert_eq!(nft.info.p2_puzzle_hash, h.seller.puzzle_hash);
+
+        h.assert_unspent(tracked.coin());
+        let child_reserve = h.auction.info.reserve.coin();
+        assert_eq!(child_reserve.parent_coin_info, stand_in.coin().coin_id());
+        h.assert_unspent(child_reserve);
     }
 
     Ok(())

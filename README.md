@@ -28,15 +28,17 @@ These can also be customized, but they may be enforced to be certain values by t
 - The buyer's premium
 - The commission
 
-The auctioneer can always cancel the auction before the first bid, regardless of these settings. The cancel is authorized by the payout address, so whoever controls it can cancel.
+The auctioneer can cancel the auction before the first bid, regardless of these settings. The cancel is authorized by the payout address, so whoever controls it can cancel.
 
 Both the buyer's premium and commission are percentages, and are sent to a single address. If these need to be split between multiple addresses, you should use something external to do so such as the [royalty split](https://splitxch.com/) primitive.
 
 ## Cancelling
 
-The cancel action asserts that the auction hasn't ended and has no bids, and has no timing restrictions. It must be authorized by a coin at the payout address, which sends the message `c` to the current auction coin with the `SENDER_PUZZLE | RECEIVER_COIN` mode (`0x17`). Since the message is sent to a specific auction coin, it can't be reused once the auction has been spent. `AuctionExt::cancel_authorization` returns the condition that coin must output, and `AuctionExt::spend_cancel_action` builds the action, which must be spent along with `AuctionExt::unlock_nft` in the same spend bundle. Like the end action, the cancel action creates the coin announcement `$`, so a cancelled auction looks the same as one that ended with no bids.
+The cancel action asserts that the auction hasn't ended and has no bids, and has no timing restrictions. It must be authorized by a coin at the payout address, which sends the message `c` to the current auction coin with the `SENDER_PUZZLE | RECEIVER_COIN` mode (`0x17`). Since the message is sent to a specific auction coin, it can't be reused once the auction has been spent. `AuctionExt::cancel_authorization` returns the condition that coin must output, and `AuctionExt::spend_cancel_action` builds the action, which must be spent along with `AuctionExt::unlock_nft` in the same spend bundle. Like the end action, the cancel action creates the coin announcement `$`, and leaves the auction in the same state as ending it with no bids. The spend itself still reveals that it was cancelled.
 
 A cancel spends the auction coin, so it conflicts with a pending first bid in the mempool, and whichever confirms first wins. The auctioneer can't replace a pending bid with a cancel, since the bidder's coin asserts the bid's announcement.
+
+Like ending an auction, a cancel must spend an empty coin at the lock address as the reserve. Any such coin works (see [Discovery](#discovery)), so if the launcher memo's reserve was never created, or a revocable CAT's issuer revoked it, the auctioneer has to create a new one first, and set `AuctionInfo::reserve` to it before spending the auction. For CAT reserves, this means the auctioneer needs to hold some of that CAT, since the new reserve must be a coin of the same asset.
 
 ## Fees and Royalties
 
