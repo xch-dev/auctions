@@ -85,7 +85,7 @@ The compiled puzzles are checked into the repository next to their sources (as `
 rue build -a -s -x -h
 ```
 
-CI should run the same command followed by `git diff --exit-code puzzles` to ensure that the compiled puzzles are up to date. Then run the tests with:
+CI runs the same command and fails if anything in `puzzles` changes, to ensure that the compiled puzzles are up to date. Then run the tests with:
 
 ```bash
 cargo test
