@@ -15,7 +15,7 @@ use chia_wallet_sdk::{
 
 use crate::{
     AUCTION_SINGLETON_AMOUNT, AuctionInfo, AuctionReserve, AuctionState, Bid, BidActionSolution,
-    NftUnlockerSolution, spend_auction_lock,
+    CANCEL_MESSAGE, CANCEL_MESSAGE_MODE, NftUnlockerSolution, spend_auction_lock,
 };
 
 pub type Auction = Singleton<AuctionInfo>;
@@ -43,8 +43,20 @@ pub trait AuctionExt: Sized {
     /// [`unlock_nft`](AuctionExt::unlock_nft) in the same spend bundle.
     fn spend_end_action(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Spend, DriverError>;
 
-    /// Spends the locked NFT to the winning bidder. This must be included in the same spend bundle as
-    /// the end action, and `self` must be the auction before it's ended.
+    /// Cancels the auction before the first bid, sending the NFT back to the payout address. `nft` is
+    /// the locked NFT, which must be unlocked with [`unlock_nft`](AuctionExt::unlock_nft) in the same
+    /// spend bundle. A coin at the payout address must also output the conditions from
+    /// [`cancel_authorization`](AuctionExt::cancel_authorization) in the same spend bundle.
+    fn spend_cancel_action(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Spend, DriverError>;
+
+    /// The conditions that a coin at the auction's payout address must output to authorize
+    /// cancelling this auction coin. They only authorize a cancel of this exact coin, so they can't
+    /// be reused once the auction has been spent.
+    fn cancel_authorization(&self, ctx: &mut SpendContext) -> Result<Conditions, DriverError>;
+
+    /// Spends the locked NFT to the winning bidder, or back to the payout address if there are no
+    /// bids. This must be included in the same spend bundle as the end or cancel action, and `self`
+    /// must be the auction before it's ended or cancelled.
     fn unlock_nft(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Nft, DriverError>;
 
     /// Runs the action puzzles to determine the next state and the reserve coin's conditions, exactly
@@ -85,6 +97,22 @@ impl AuctionExt for Auction {
         // The end action passes its solution to the unlocker after the winning bid
         let solution = ctx.alloc(&clvm_list!(nft.coin.amount))?;
         Ok(Spend::new(puzzle, solution))
+    }
+
+    fn spend_cancel_action(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Spend, DriverError> {
+        let puzzle = self.info.cancel_action(ctx)?;
+        // Like the end action, the cancel action passes its solution to the unlocker
+        let solution = ctx.alloc(&clvm_list!(nft.coin.amount))?;
+        Ok(Spend::new(puzzle, solution))
+    }
+
+    fn cancel_authorization(&self, ctx: &mut SpendContext) -> Result<Conditions, DriverError> {
+        let receiver = ctx.alloc(&self.coin.coin_id())?;
+        Ok(Conditions::new().send_message(
+            CANCEL_MESSAGE_MODE,
+            CANCEL_MESSAGE.to_vec().into(),
+            vec![receiver],
+        ))
     }
 
     fn unlock_nft(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Nft, DriverError> {
@@ -133,7 +161,8 @@ impl AuctionExt for Auction {
                 }
             }
 
-            // Only the end action pays the royalty. A bid refund can also be sent to the settlement
+            // Only the end action pays the royalty, and the cancel action never creates any reserve
+            // conditions. A bid refund can also be sent to the settlement
             // puzzle hash, if that's the puzzle hash the bidder chose.
             if new_state.ended && !state.ended {
                 for &condition in &action_reserve_conditions {

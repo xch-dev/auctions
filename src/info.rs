@@ -9,8 +9,8 @@ use chia_wallet_sdk::{
 
 use crate::{
     AuctionMemo, AuctionReserve, AuctionSettings, AuctionState, BidActionArgs, BidVerifier,
-    EndActionArgs, FlatBidVerifierArgs, NftUnlockerArgs, PercentBidVerifierArgs, ReserveMemo,
-    auction_lock_p2_puzzle_hash, calculate_bps_payment,
+    CancelActionArgs, EndActionArgs, FlatBidVerifierArgs, NftUnlockerArgs, PercentBidVerifierArgs,
+    ReserveMemo, auction_lock_p2_puzzle_hash, calculate_bps_payment,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,8 +182,34 @@ impl AuctionInfo {
         .into()
     }
 
-    pub fn merkle_leaves(&self) -> [Bytes32; 2] {
-        [self.bid_action_hash(), self.end_action_hash()]
+    /// Cancels the auction before the first bid, which must be authorized by the payout puzzle. See
+    /// [`AuctionExt::spend_cancel_action`](crate::AuctionExt::spend_cancel_action).
+    pub fn cancel_action(&self, ctx: &mut SpendContext) -> Result<NodePtr, DriverError> {
+        let unlocker = self.nft_unlocker(ctx)?;
+
+        ctx.curry(CancelActionArgs::new(
+            unlocker,
+            self.settings.payments.payout_puzzle_hash,
+            self.nft_coin_id,
+        ))
+    }
+
+    pub fn cancel_action_hash(&self) -> Bytes32 {
+        CancelActionArgs::new(
+            self.nft_unlocker_args().curry_tree_hash(),
+            self.settings.payments.payout_puzzle_hash,
+            self.nft_coin_id,
+        )
+        .curry_tree_hash()
+        .into()
+    }
+
+    pub fn merkle_leaves(&self) -> [Bytes32; 3] {
+        [
+            self.bid_action_hash(),
+            self.end_action_hash(),
+            self.cancel_action_hash(),
+        ]
     }
 
     pub fn merkle_tree(&self) -> MerkleTree {

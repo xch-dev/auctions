@@ -17,6 +17,7 @@ fn assert_mod<T: Mod>(name: &str) {
 fn embedded_puzzles_match_their_hashes() {
     assert_mod::<BidActionArgs<TreeHash>>("bid_action");
     assert_mod::<EndActionArgs<TreeHash>>("end_action");
+    assert_mod::<CancelActionArgs<TreeHash>>("cancel_action");
     assert_mod::<NftUnlockerArgs>("nft_unlocker");
     assert_mod::<FlatBidVerifierArgs>("flat_bid_verifier");
     assert_mod::<PercentBidVerifierArgs>("percent_bid_verifier");

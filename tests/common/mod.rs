@@ -354,6 +354,53 @@ impl Harness {
         Ok(nft)
     }
 
+    /// Cancels the auction, authorized by a coin at the seller's payout address, and unlocks the NFT
+    /// back to the seller.
+    pub fn cancel(&mut self) -> Result<Nft> {
+        let authorizer = self.seller_coin();
+        self.cancel_authorized_by(Some(authorizer))
+    }
+
+    /// Like [`Harness::cancel`], but the cancel message is sent by `authorizer`'s coin instead, or not
+    /// at all.
+    pub fn cancel_authorized_by(&mut self, authorizer: Option<BlsPairWithCoin>) -> Result<Nft> {
+        let result = self.try_cancel(authorizer);
+        if result.is_err() {
+            self.ctx.take();
+        }
+        result
+    }
+
+    fn try_cancel(&mut self, authorizer: Option<BlsPairWithCoin>) -> Result<Nft> {
+        let mut keys = Vec::new();
+
+        if let Some(authorizer) = authorizer {
+            let conditions = self.auction.cancel_authorization(&mut self.ctx)?;
+            StandardLayer::new(authorizer.pk).spend(&mut self.ctx, authorizer.coin, conditions)?;
+            keys.push(authorizer.sk);
+        }
+
+        let cancel_action = self.auction.spend_cancel_action(&mut self.ctx, &self.nft)?;
+        let nft = self.auction.unlock_nft(&mut self.ctx, &self.nft)?;
+        let auction = self
+            .auction
+            .spend(&mut self.ctx, vec![cancel_action], vec![])?;
+        let coin_spends = self.ctx.take();
+        self.sim.spend_coins(coin_spends.clone(), &keys)?;
+        self.confirmed(&coin_spends, auction)?;
+        self.nft = nft;
+        Ok(nft)
+    }
+
+    /// A new empty coin owned by the seller, at the auction's payout address.
+    pub fn seller_coin(&mut self) -> BlsPairWithCoin {
+        let coin = self.sim.new_coin(self.seller.puzzle_hash, 0);
+        BlsPairWithCoin {
+            coin,
+            ..self.seller.clone()
+        }
+    }
+
     /// Creates an empty coin at the auction lock, which can be spent as the reserve in place of the
     /// real one while the auction's reserve amount is 0.
     pub fn decoy_reserve(&mut self) -> Result<AuctionReserve> {

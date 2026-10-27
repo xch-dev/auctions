@@ -1,0 +1,51 @@
+import super::shared::*;
+
+// The message the payout puzzle must send to the auction coin to authorize a cancel. Since the
+// message is sent to a specific auction coin, it doesn't need to commit to anything else.
+inline const CANCEL_MESSAGE: Bytes = "cancel";
+
+struct Solution {
+    ...unlocker_solution: Any,
+}
+
+fn main(
+    UNLOCKER: fn(Truth: Bid, ...solution: Any) -> List<NftCondition>,
+    PAYOUT_PUZZLE_HASH: Bytes32,
+    NFT_COIN_ID: Bytes32,
+    Truth: AuctionStateTruth,
+    ...{ unlocker_solution }: Solution,
+) -> Output {
+    // The seller can only cancel before the first bid, since bidders lock up funds expecting the
+    // auction to run until its end. With no bids, the reserve is empty and there's nothing to pay.
+    assert !Truth.state.ended & (Truth.state.winning_bid.amount == 0);
+
+    // With no bids, the winning bid is the initial one, which sends the NFT back to the seller
+    let unlock_conditions = UNLOCKER(Truth.state.winning_bid, ...unlocker_solution);
+
+    Output {
+        new_truth: AuctionStateTruth {
+            state: AuctionState {
+                reserve_amount: 0,
+                ended: true,
+                winning_bid: Truth.state.winning_bid,
+            },
+            ephemeral_state: Truth.ephemeral_state,
+        },
+        conditions: [
+            // Only the seller can cancel, by spending a coin at the payout address which sends the
+            // cancel message to this auction coin
+            ReceiveMessage {
+                mode: SENDER_PUZZLE | RECEIVER_COIN,
+                message: CANCEL_MESSAGE,
+                sender: [PAYOUT_PUZZLE_HASH],
+            },
+
+            // Authorize the NFT to be sent back to the seller
+            SendMessage {
+                mode: SENDER_PUZZLE | RECEIVER_COIN,
+                receiver: [NFT_COIN_ID],
+                message: tree_hash((1, unlock_conditions)),
+            },
+        ],
+    }
+}
