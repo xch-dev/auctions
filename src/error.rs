@@ -15,6 +15,15 @@ pub enum AuctionError {
     #[error("the {name} of {bps} bps exceeds 10,000 bps")]
     BpsTooHigh { name: &'static str, bps: u64 },
 
+    #[error("the buy now price must be greater than 0")]
+    ZeroBuyNowPrice,
+
+    #[error("the buy now price of {buy_now_price} is below the minimum bid of {minimum_bid}")]
+    BuyNowPriceBelowMinimumBid {
+        buy_now_price: u64,
+        minimum_bid: u64,
+    },
+
     #[error("puzzle hash {0} receives more than one payment when the auction ends")]
     DuplicatePaymentPuzzleHash(Bytes32),
 

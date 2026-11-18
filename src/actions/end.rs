@@ -9,6 +9,8 @@ pub struct EndActionArgs<U = NodePtr> {
     pub timings: Timings,
     pub payments: Payments,
     pub royalty_bps: u64,
+    /// The price at which a bid wins the auction outright, or 0 if there's no buy now price.
+    pub buy_now_price: u64,
     /// The inner puzzle hash of the settlement coin created by the reserve, which is wrapped by the
     /// CAT layer for CAT reserves.
     pub settlement_payment_hash: Bytes32,
@@ -21,6 +23,7 @@ impl<U> EndActionArgs<U> {
         timings: Timings,
         payments: Payments,
         royalty_bps: u64,
+        buy_now_price: u64,
         settlement_payment_hash: Bytes32,
         nft_coin_id: Bytes32,
     ) -> Self {
@@ -29,6 +32,7 @@ impl<U> EndActionArgs<U> {
             timings,
             payments,
             royalty_bps,
+            buy_now_price,
             settlement_payment_hash,
             nft_coin_id,
         }

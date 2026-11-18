@@ -51,6 +51,7 @@ pub struct Config {
     pub royalty_bps: u16,
     pub reserve: ReserveKind,
     pub did_owner: bool,
+    pub buy_now_price: Option<u64>,
 }
 
 impl Default for Config {
@@ -66,6 +67,7 @@ impl Default for Config {
             royalty_bps: 500,
             reserve: ReserveKind::Xch,
             did_owner: false,
+            buy_now_price: None,
         }
     }
 }
@@ -80,6 +82,7 @@ impl Config {
                 commission: BpsPayment::new(self.commission_bps, COMMISSION_PUZZLE_HASH),
                 payout_puzzle_hash,
             },
+            buy_now_price: self.buy_now_price,
         }
     }
 }
@@ -88,6 +91,15 @@ impl Config {
 pub struct Bidder {
     pub bid: Bid,
     pub reserve_amount: u64,
+}
+
+/// The spends of the bidders in a single spend of the auction.
+#[derive(Default)]
+struct BidSpend {
+    actions: Vec<Spend>,
+    cat_spends: Vec<CatSpend>,
+    keys: Vec<SecretKey>,
+    bidders: Vec<Bidder>,
 }
 
 /// An auction for a freshly minted NFT, launched and confirmed in a simulator.
@@ -292,54 +304,133 @@ impl Harness {
     }
 
     fn try_bids(&mut self, bids: &[(u64, bool)]) -> Result<Vec<Bidder>> {
-        let mut bidders = Vec::new();
-        let mut actions = Vec::new();
-        let mut cat_spends = Vec::new();
-        let mut keys = Vec::new();
+        let mut spend = BidSpend::default();
 
         for &(amount, grace) in bids {
-            let reserve_amount = self
-                .auction
-                .info
-                .reserve_amount_for_bid(amount)
-                .ok_or(anyhow!("reserve amount overflow"))?;
-
-            let key = if self.bank.is_some() {
-                self.sim.bls(0)
-            } else {
-                self.sim.bls(reserve_amount)
-            };
-
+            let key = self.bidder_key(amount)?;
             let bid = Bid::new(amount, key.puzzle_hash);
-            actions.push(self.auction.spend_bid_action(&mut self.ctx, bid, grace)?);
-
-            let conditions = Conditions::new().assert_coin_announcement(announcement_id(
-                self.auction.coin.coin_id(),
-                bid.tree_hash(),
-            ));
-            let p2 = StandardLayer::new(key.pk);
-
-            if self.bank.is_some() {
-                let cat = self.fund_cat(key.puzzle_hash, reserve_amount)?;
-                let spend = p2.spend_with_conditions(&mut self.ctx, conditions)?;
-                cat_spends.push(CatSpend::new(cat, spend));
-            } else {
-                p2.spend(&mut self.ctx, key.coin, conditions)?;
-            }
-
-            keys.push(key.sk.clone());
-            bidders.push(Bidder {
-                bid,
-                reserve_amount,
-            });
+            spend
+                .actions
+                .push(self.auction.spend_bid_action(&mut self.ctx, bid, grace)?);
+            self.fund_bid(&mut spend, key, bid)?;
         }
 
-        let auction = self.auction.spend(&mut self.ctx, actions, cat_spends)?;
-        let coin_spends = self.ctx.take();
-        self.sim.spend_coins(coin_spends.clone(), &keys)?;
-        self.confirmed(&coin_spends, auction)?;
+        self.finish_bids(spend)
+    }
 
-        Ok(bidders)
+    /// Buys the auction at its buy now price, returning the buyer and the NFT sent to them.
+    pub fn buy_now(&mut self, grace: bool) -> Result<(Bidder, Nft)> {
+        let (bidders, nft) = self.bids_then_buy_now(&[], grace)?;
+        Ok((bidders[0], nft))
+    }
+
+    /// Like [`Harness::buy_now`], but first places `bids` in the same spend of the auction, which is
+    /// how a buyer would buy an auction with a pending bid. The buyer is the last bidder returned.
+    pub fn bids_then_buy_now(
+        &mut self,
+        bids: &[(u64, bool)],
+        grace: bool,
+    ) -> Result<(Vec<Bidder>, Nft)> {
+        let result = self.try_bids_then_buy_now(bids, grace);
+        if result.is_err() {
+            self.ctx.take();
+        }
+        result
+    }
+
+    fn try_bids_then_buy_now(
+        &mut self,
+        bids: &[(u64, bool)],
+        grace: bool,
+    ) -> Result<(Vec<Bidder>, Nft)> {
+        let mut spend = BidSpend::default();
+
+        for &(amount, grace) in bids {
+            let key = self.bidder_key(amount)?;
+            let bid = Bid::new(amount, key.puzzle_hash);
+            spend
+                .actions
+                .push(self.auction.spend_bid_action(&mut self.ctx, bid, grace)?);
+            self.fund_bid(&mut spend, key, bid)?;
+        }
+
+        let price = self
+            .auction
+            .info
+            .available_buy_now_price()
+            .ok_or(anyhow!("the auction can't be bought now"))?;
+        let key = self.bidder_key(price)?;
+        let puzzle_hash = key.puzzle_hash;
+
+        // Funding a CAT bid confirms a spend of the bank, which would also confirm any spends
+        // already in the context, so the buyer must be funded before the NFT is unlocked
+        self.fund_bid(&mut spend, key, Bid::new(price, puzzle_hash))?;
+
+        let buy_now =
+            self.auction
+                .spend_buy_now_actions(&mut self.ctx, puzzle_hash, grace, &self.nft)?;
+        assert_eq!(buy_now.bid, Bid::new(price, puzzle_hash));
+        spend.actions.extend(buy_now.action_spends);
+
+        let bidders = self.finish_bids(spend)?;
+        self.nft = buy_now.nft;
+        Ok((bidders, buy_now.nft))
+    }
+
+    /// A new key for a bidder, with a coin that holds the reserve amount for a bid of `amount` if the
+    /// reserve is XCH. CAT bidders are funded from the bank instead.
+    fn bidder_key(&mut self, amount: u64) -> Result<BlsPairWithCoin> {
+        if self.bank.is_some() {
+            return Ok(self.sim.bls(0));
+        }
+
+        let reserve_amount = self
+            .auction
+            .info
+            .reserve_amount_for_bid(amount)
+            .ok_or(anyhow!("reserve amount overflow"))?;
+        Ok(self.sim.bls(reserve_amount))
+    }
+
+    /// Funds exactly the reserve amount for `bid` from `key`, asserting the bid's announcement so the
+    /// funds can't be reused.
+    fn fund_bid(&mut self, spend: &mut BidSpend, key: BlsPairWithCoin, bid: Bid) -> Result<()> {
+        let reserve_amount = self
+            .auction
+            .info
+            .reserve_amount_for_bid(bid.amount)
+            .ok_or(anyhow!("reserve amount overflow"))?;
+
+        let conditions = Conditions::new().assert_coin_announcement(announcement_id(
+            self.auction.coin.coin_id(),
+            bid.tree_hash(),
+        ));
+        let p2 = StandardLayer::new(key.pk);
+
+        if self.bank.is_some() {
+            let cat = self.fund_cat(key.puzzle_hash, reserve_amount)?;
+            let cat_spend = p2.spend_with_conditions(&mut self.ctx, conditions)?;
+            spend.cat_spends.push(CatSpend::new(cat, cat_spend));
+        } else {
+            p2.spend(&mut self.ctx, key.coin, conditions)?;
+        }
+
+        spend.keys.push(key.sk);
+        spend.bidders.push(Bidder {
+            bid,
+            reserve_amount,
+        });
+        Ok(())
+    }
+
+    fn finish_bids(&mut self, spend: BidSpend) -> Result<Vec<Bidder>> {
+        let auction = self
+            .auction
+            .spend(&mut self.ctx, spend.actions, spend.cat_spends)?;
+        let coin_spends = self.ctx.take();
+        self.sim.spend_coins(coin_spends.clone(), &spend.keys)?;
+        self.confirmed(&coin_spends, auction)?;
+        Ok(spend.bidders)
     }
 
     /// Ends the auction and unlocks the NFT, returning the NFT sent to the winning bidder.
@@ -613,11 +704,19 @@ impl Harness {
     /// every fee recipient, and created an empty reserve for the ended auction.
     pub fn assert_settled(&self, reserve: AuctionReserve, amount: u64) {
         let premium = fee(amount, self.config.buyers_premium_bps);
+        let royalty = fee(amount, self.config.royalty_bps.into());
+        assert_eq!(reserve.coin().amount, amount + premium + royalty);
+        self.assert_paid_out(reserve, amount);
+    }
+
+    /// Like [`Harness::assert_settled`], but doesn't check the reserve's amount. When the winning bid
+    /// is placed in the same spend as the end, the reserve pays out funds that the bidder added to
+    /// the spend bundle, rather than funds it already held.
+    pub fn assert_paid_out(&self, reserve: AuctionReserve, amount: u64) {
+        let premium = fee(amount, self.config.buyers_premium_bps);
         let commission = fee(amount, self.config.commission_bps);
         let royalty = fee(amount, self.config.royalty_bps.into());
         let payout = amount - commission;
-
-        assert_eq!(reserve.coin().amount, amount + premium + royalty);
 
         for (puzzle_hash, payment) in [
             (PREMIUM_PUZZLE_HASH, premium),

@@ -28,6 +28,7 @@ fn auction(premium_bps: u64, commission_bps: u64, royalty_bps: u16) -> Auction {
             commission: BpsPayment::new(commission_bps, COMMISSION_PUZZLE_HASH),
             payout_puzzle_hash: PAYOUT_PUZZLE_HASH,
         },
+        buy_now_price: None,
     };
     let reserve = Coin::new(
         Bytes32::new([6; 32]),

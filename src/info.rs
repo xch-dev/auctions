@@ -106,6 +106,14 @@ impl AuctionInfo {
         bid_amount.checked_add(premium)?.checked_add(royalty)
     }
 
+    /// The buy now price, if the auction can still be bought at it. That's only possible until it's
+    /// ended, and while the winning bid is below the buy now price.
+    pub fn available_buy_now_price(&self) -> Option<u64> {
+        self.settings
+            .buy_now_price
+            .filter(|&price| !self.state.ended && self.state.winning_bid.amount < price)
+    }
+
     pub fn bid_action(&self, ctx: &mut SpendContext) -> Result<NodePtr, DriverError> {
         let bid_verifier = match self.settings.bid_verifier {
             BidVerifier::Flat {
@@ -123,6 +131,7 @@ impl AuctionInfo {
             self.settings.timings,
             self.settings.payments.buyers_premium.bps,
             self.royalty_bps(),
+            self.settings.buy_now_price_arg(),
         ))
     }
 
@@ -143,6 +152,7 @@ impl AuctionInfo {
             self.settings.timings,
             self.settings.payments.buyers_premium.bps,
             self.royalty_bps(),
+            self.settings.buy_now_price_arg(),
         )
         .curry_tree_hash()
         .into()
@@ -164,6 +174,7 @@ impl AuctionInfo {
             self.settings.timings,
             self.settings.payments,
             self.royalty_bps(),
+            self.settings.buy_now_price_arg(),
             SETTLEMENT_PAYMENT_HASH.into(),
             self.nft_coin_id,
         ))
@@ -175,6 +186,7 @@ impl AuctionInfo {
             self.settings.timings,
             self.settings.payments,
             self.royalty_bps(),
+            self.settings.buy_now_price_arg(),
             SETTLEMENT_PAYMENT_HASH.into(),
             self.nft_coin_id,
         )

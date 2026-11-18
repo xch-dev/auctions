@@ -31,6 +31,20 @@ pub struct AuctionChildState {
     pub royalty_amount: Option<u64>,
 }
 
+/// The spends needed to buy an auction at its buy now price. See
+/// [`AuctionExt::spend_buy_now_actions`].
+#[derive(Debug, Clone)]
+pub struct BuyNowSpends {
+    /// The winning bid at the buy now price. The buyer must fund the reserve with
+    /// [`reserve_amount_for_bid`](AuctionInfo::reserve_amount_for_bid) of its amount, and assert its
+    /// announcement, the same as for any other bid.
+    pub bid: Bid,
+    /// The bid and end actions, which must be spent in this order, after any other actions.
+    pub action_spends: Vec<Spend>,
+    /// The NFT sent to the buyer.
+    pub nft: Nft,
+}
+
 pub trait AuctionExt: Sized {
     fn spend_bid_action(
         &self,
@@ -42,6 +56,19 @@ pub trait AuctionExt: Sized {
     /// Ends the auction. `nft` is the locked NFT, which must be unlocked with
     /// [`unlock_nft`](AuctionExt::unlock_nft) in the same spend bundle.
     fn spend_end_action(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Spend, DriverError>;
+
+    /// Buys the auction at its buy now price for `puzzle_hash`, by placing a bid at that price and
+    /// ending the auction in the same spend. `nft` is the locked NFT, which is unlocked to the buyer
+    /// in the same spend bundle, so [`unlock_nft`](AuctionExt::unlock_nft) must not be called. Like
+    /// any other bid, it must be placed before the end time, or within the grace period if `grace`
+    /// is set. Returns an error if the auction can't be bought now.
+    fn spend_buy_now_actions(
+        &self,
+        ctx: &mut SpendContext,
+        puzzle_hash: Bytes32,
+        grace: bool,
+        nft: &Nft,
+    ) -> Result<BuyNowSpends, DriverError>;
 
     /// Cancels the auction before the first bid, sending the NFT back to the payout address. `nft` is
     /// the locked NFT, which must be unlocked with [`unlock_nft`](AuctionExt::unlock_nft) in the same
@@ -56,8 +83,17 @@ pub trait AuctionExt: Sized {
 
     /// Spends the locked NFT to the winning bidder, or back to the payout address if there are no
     /// bids. This must be included in the same spend bundle as the end or cancel action, and `self`
-    /// must be the auction before it's ended or cancelled.
+    /// must be the auction before it's ended or cancelled, with no bids placed in the same spend.
     fn unlock_nft(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Nft, DriverError>;
+
+    /// Like [`unlock_nft`](AuctionExt::unlock_nft), but for the given winning bid, which must be the
+    /// winning bid when the end action is run.
+    fn unlock_nft_for_bid(
+        &self,
+        ctx: &mut SpendContext,
+        nft: &Nft,
+        winning_bid: Bid,
+    ) -> Result<Nft, DriverError>;
 
     /// Runs the action puzzles to determine the next state and the reserve coin's conditions, exactly
     /// as the action layer and reserve finalizer will on chain.
@@ -99,6 +135,29 @@ impl AuctionExt for Auction {
         Ok(Spend::new(puzzle, solution))
     }
 
+    fn spend_buy_now_actions(
+        &self,
+        ctx: &mut SpendContext,
+        puzzle_hash: Bytes32,
+        grace: bool,
+        nft: &Nft,
+    ) -> Result<BuyNowSpends, DriverError> {
+        let price = self.info.available_buy_now_price().ok_or_else(|| {
+            DriverError::Custom("the auction can't be bought at a buy now price".to_string())
+        })?;
+
+        let bid = Bid::new(price, puzzle_hash);
+        let bid_action = self.spend_bid_action(ctx, bid, grace)?;
+        let end_action = self.spend_end_action(ctx, nft)?;
+        let nft = self.unlock_nft_for_bid(ctx, nft, bid)?;
+
+        Ok(BuyNowSpends {
+            bid,
+            action_spends: vec![bid_action, end_action],
+            nft,
+        })
+    }
+
     fn spend_cancel_action(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Spend, DriverError> {
         let puzzle = self.info.cancel_action(ctx)?;
         // Like the end action, the cancel action passes its solution to the unlocker
@@ -116,11 +175,18 @@ impl AuctionExt for Auction {
     }
 
     fn unlock_nft(&self, ctx: &mut SpendContext, nft: &Nft) -> Result<Nft, DriverError> {
+        self.unlock_nft_for_bid(ctx, nft, self.info.state.winning_bid)
+    }
+
+    fn unlock_nft_for_bid(
+        &self,
+        ctx: &mut SpendContext,
+        nft: &Nft,
+        winning_bid: Bid,
+    ) -> Result<Nft, DriverError> {
         let unlocker = self.info.nft_unlocker(ctx)?;
-        let unlocker_solution = ctx.alloc(&NftUnlockerSolution::new(
-            self.info.state.winning_bid,
-            nft.coin.amount,
-        ))?;
+        let unlocker_solution =
+            ctx.alloc(&NftUnlockerSolution::new(winning_bid, nft.coin.amount))?;
         let conditions = ctx.run(unlocker, unlocker_solution)?;
         let delegated_puzzle = ctx.alloc(&clvm_quote!(conditions))?;
 
