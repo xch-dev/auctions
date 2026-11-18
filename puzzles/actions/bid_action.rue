@@ -11,6 +11,8 @@ fn main(
     TIMINGS: Timings,
     BUYERS_PREMIUM_BPS: Int,
     ROYALTY_BPS: Int,
+    // The price at which a bid wins the auction outright, or 0 if there's no buy now price
+    BUY_NOW_PRICE: Int,
     Truth: AuctionStateTruth,
     ...{ bid, grace }: Solution,
 ) -> Output {
@@ -30,10 +32,18 @@ fn main(
     //
     // Bids must strictly increase regardless of the verifier. Since the initial winning bid amount
     // is 0, this also ensures that every bid is positive.
+    //
+    // Bids can't exceed the buy now price, so a bid at the buy now price can never be outbid, and
+    // the end action lets it end the auction right away. It skips the bid verifier, since the
+    // increment could otherwise make the buy now price unreachable once there's a bid close to it.
+    // Every bid is positive, so this never applies if there's no buy now price.
+    let is_buy_now = bid.amount == BUY_NOW_PRICE;
+
     assert !Truth.state.ended
         & (bid.puzzle_hash.length == 32)
         & (bid.amount > Truth.state.winning_bid.amount)
-        & BID_VERIFIER(old_bid, bid);
+        & ((BUY_NOW_PRICE == 0) | !(bid.amount > BUY_NOW_PRICE))
+        & (is_buy_now | BID_VERIFIER(old_bid, bid));
 
     // The premium and royalty are rounded separately so that the reserve holds exactly what the end
     // action pays out. This matters for CAT reserves, since the CAT ring must balance exactly.

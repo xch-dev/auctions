@@ -106,6 +106,14 @@ impl AuctionInfo {
         bid_amount.checked_add(premium)?.checked_add(royalty)
     }
 
+    /// The buy now price, if the auction can still be bought at it. That's only possible until it's
+    /// ended, and while the winning bid is below the buy now price.
+    pub fn available_buy_now_price(&self) -> Option<u64> {
+        self.settings
+            .buy_now_price
+            .filter(|&price| !self.state.ended && self.state.winning_bid.amount < price)
+    }
+
     pub fn bid_action(&self, ctx: &mut SpendContext) -> Result<NodePtr, DriverError> {
         let bid_verifier = match self.settings.bid_verifier {
             BidVerifier::Flat {
@@ -118,12 +126,7 @@ impl AuctionInfo {
             } => ctx.curry(PercentBidVerifierArgs::new(minimum_bid, bid_increment_bps))?,
         };
 
-        ctx.curry(BidActionArgs::new(
-            bid_verifier,
-            self.settings.timings,
-            self.settings.payments.buyers_premium.bps,
-            self.royalty_bps(),
-        ))
+        ctx.curry(self.bid_action_args(bid_verifier))
     }
 
     pub fn bid_action_hash(&self) -> Bytes32 {
@@ -138,14 +141,19 @@ impl AuctionInfo {
             } => PercentBidVerifierArgs::new(minimum_bid, bid_increment_bps).curry_tree_hash(),
         };
 
+        self.bid_action_args(bid_verifier_hash)
+            .curry_tree_hash()
+            .into()
+    }
+
+    fn bid_action_args<V>(&self, bid_verifier: V) -> BidActionArgs<V> {
         BidActionArgs::new(
-            bid_verifier_hash,
+            bid_verifier,
             self.settings.timings,
             self.settings.payments.buyers_premium.bps,
             self.royalty_bps(),
+            self.settings.buy_now_price_arg(),
         )
-        .curry_tree_hash()
-        .into()
     }
 
     fn nft_unlocker_args(&self) -> NftUnlockerArgs {
@@ -158,28 +166,25 @@ impl AuctionInfo {
 
     pub fn end_action(&self, ctx: &mut SpendContext) -> Result<NodePtr, DriverError> {
         let unlocker = self.nft_unlocker(ctx)?;
+        ctx.curry(self.end_action_args(unlocker))
+    }
 
-        ctx.curry(EndActionArgs::new(
+    pub fn end_action_hash(&self) -> Bytes32 {
+        self.end_action_args(self.nft_unlocker_args().curry_tree_hash())
+            .curry_tree_hash()
+            .into()
+    }
+
+    fn end_action_args<U>(&self, unlocker: U) -> EndActionArgs<U> {
+        EndActionArgs::new(
             unlocker,
             self.settings.timings,
             self.settings.payments,
             self.royalty_bps(),
-            SETTLEMENT_PAYMENT_HASH.into(),
-            self.nft_coin_id,
-        ))
-    }
-
-    pub fn end_action_hash(&self) -> Bytes32 {
-        EndActionArgs::new(
-            self.nft_unlocker_args().curry_tree_hash(),
-            self.settings.timings,
-            self.settings.payments,
-            self.royalty_bps(),
+            self.settings.buy_now_price_arg(),
             SETTLEMENT_PAYMENT_HASH.into(),
             self.nft_coin_id,
         )
-        .curry_tree_hash()
-        .into()
     }
 
     /// Cancels the auction before the first bid, which must be authorized by the payout puzzle. See

@@ -115,6 +115,46 @@ fn allows_fees_of_100_percent() -> Result<()> {
 }
 
 #[test]
+fn rejects_invalid_buy_now_prices() {
+    let with_buy_now = |buy_now_price| Config {
+        buy_now_price: Some(buy_now_price),
+        ..Config::default()
+    };
+
+    // `Some(0)` would be curried in the same way as `None`
+    let error = launch_error(with_buy_now(0), default_settings);
+    assert!(matches!(error, AuctionError::ZeroBuyNowPrice), "{error}");
+
+    // A bid at the buy now price skips the bid verifier, so it can't be below the minimum bid
+    for bid_verifier in [
+        BidVerifier::Flat {
+            minimum_bid: 100,
+            bid_increment: 100,
+        },
+        BidVerifier::Percent {
+            minimum_bid: 100,
+            bid_increment_bps: 100,
+        },
+    ] {
+        let config = Config {
+            bid_verifier,
+            ..with_buy_now(99)
+        };
+        let error = launch_error(config, default_settings);
+        assert!(
+            matches!(
+                error,
+                AuctionError::BuyNowPriceBelowMinimumBid {
+                    buy_now_price: 99,
+                    minimum_bid: 100,
+                }
+            ),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn rejects_duplicate_payment_puzzle_hashes() {
     let settings: [fn(&Config, Bytes32, Bytes32) -> AuctionSettings; 3] = [
         |config, seller, _| {
