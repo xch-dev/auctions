@@ -24,6 +24,11 @@ pub enum AuctionError {
         minimum_bid: u64,
     },
 
+    #[error(
+        "the auction can't be bought now, since it has no buy now price, has ended, or has a bid at it"
+    )]
+    BuyNowUnavailable,
+
     #[error("puzzle hash {0} receives more than one payment when the auction ends")]
     DuplicatePaymentPuzzleHash(Bytes32),
 

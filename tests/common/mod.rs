@@ -305,16 +305,7 @@ impl Harness {
 
     fn try_bids(&mut self, bids: &[(u64, bool)]) -> Result<Vec<Bidder>> {
         let mut spend = BidSpend::default();
-
-        for &(amount, grace) in bids {
-            let key = self.bidder_key(amount)?;
-            let bid = Bid::new(amount, key.puzzle_hash);
-            spend
-                .actions
-                .push(self.auction.spend_bid_action(&mut self.ctx, bid, grace)?);
-            self.fund_bid(&mut spend, key, bid)?;
-        }
-
+        self.add_bids(&mut spend, bids)?;
         self.finish_bids(spend)
     }
 
@@ -344,21 +335,13 @@ impl Harness {
         grace: bool,
     ) -> Result<(Vec<Bidder>, Nft)> {
         let mut spend = BidSpend::default();
-
-        for &(amount, grace) in bids {
-            let key = self.bidder_key(amount)?;
-            let bid = Bid::new(amount, key.puzzle_hash);
-            spend
-                .actions
-                .push(self.auction.spend_bid_action(&mut self.ctx, bid, grace)?);
-            self.fund_bid(&mut spend, key, bid)?;
-        }
+        self.add_bids(&mut spend, bids)?;
 
         let price = self
             .auction
             .info
             .available_buy_now_price()
-            .ok_or(anyhow!("the auction can't be bought now"))?;
+            .ok_or(AuctionError::BuyNowUnavailable)?;
         let key = self.bidder_key(price)?;
         let puzzle_hash = key.puzzle_hash;
 
@@ -375,6 +358,19 @@ impl Harness {
         let bidders = self.finish_bids(spend)?;
         self.nft = buy_now.nft;
         Ok((bidders, buy_now.nft))
+    }
+
+    /// Adds a bid action for each of `bids` to `spend`, funded by a new bidder.
+    fn add_bids(&mut self, spend: &mut BidSpend, bids: &[(u64, bool)]) -> Result<()> {
+        for &(amount, grace) in bids {
+            let key = self.bidder_key(amount)?;
+            let bid = Bid::new(amount, key.puzzle_hash);
+            spend
+                .actions
+                .push(self.auction.spend_bid_action(&mut self.ctx, bid, grace)?);
+            self.fund_bid(spend, key, bid)?;
+        }
+        Ok(())
     }
 
     /// A new key for a bidder, with a coin that holds the reserve amount for a bid of `amount` if the

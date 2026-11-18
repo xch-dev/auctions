@@ -70,7 +70,7 @@ pub struct AuctionSettings {
 
 impl AuctionSettings {
     /// The buy now price as it's curried into the bid and end actions, where 0 means there isn't one.
-    pub fn buy_now_price_arg(&self) -> u64 {
+    pub(crate) fn buy_now_price_arg(&self) -> u64 {
         self.buy_now_price.unwrap_or(0)
     }
 }

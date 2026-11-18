@@ -7,6 +7,12 @@ use common::*;
 
 const BUY_NOW_PRICE: u64 = 1_000;
 
+const ALL_RESERVES: [ReserveKind; 3] = [
+    ReserveKind::Xch,
+    ReserveKind::Cat,
+    ReserveKind::RevocableCat,
+];
+
 /// The error for a spend bundle where the auction's puzzle raises during consensus validation.
 const PUZZLE_RAISED: &str = "GeneratorRuntimeError";
 
@@ -33,13 +39,22 @@ fn unchecked_bid(h: &mut Harness, amount: u64) -> Result<()> {
     h.spend_unchecked(vec![bid], reserve_amount, &[key.sk])
 }
 
+/// Asserts that the driver refuses to buy the auction now.
+fn assert_buy_now_unavailable(h: &mut Harness) {
+    let nft = h.nft;
+    let result = h
+        .auction
+        .spend_buy_now_actions(&mut h.ctx, h.seller.puzzle_hash, false, &nft);
+    assert!(
+        matches!(result, Err(AuctionError::BuyNowUnavailable)),
+        "{result:?}"
+    );
+    h.ctx.take();
+}
+
 #[test]
 fn buy_now_ends_the_auction_right_away() -> Result<()> {
-    for reserve in [
-        ReserveKind::Xch,
-        ReserveKind::Cat,
-        ReserveKind::RevocableCat,
-    ] {
+    for reserve in ALL_RESERVES {
         let mut h = Harness::new(Config {
             reserve,
             ..with_buy_now(BUY_NOW_PRICE)
@@ -76,7 +91,7 @@ fn buy_now_ends_the_auction_right_away() -> Result<()> {
         assert_fails_with(h.bid(BUY_NOW_PRICE), "raise");
         assert_fails_with(h.end(), "raise");
         assert_fails_with(h.cancel(), "raise");
-        assert_fails_with(h.buy_now(false), "can't be bought now");
+        assert_buy_now_unavailable(&mut h);
     }
 
     Ok(())
@@ -84,69 +99,101 @@ fn buy_now_ends_the_auction_right_away() -> Result<()> {
 
 #[test]
 fn buy_now_refunds_the_winning_bid() -> Result<()> {
-    let mut h = Harness::new(with_buy_now(BUY_NOW_PRICE))?;
+    for reserve in ALL_RESERVES {
+        let mut h = Harness::new(Config {
+            reserve,
+            ..with_buy_now(BUY_NOW_PRICE)
+        })?;
 
-    let bidder = h.bid(500)?;
-    assert_eq!(
-        h.auction.info.available_buy_now_price(),
-        Some(BUY_NOW_PRICE)
-    );
+        let bidder = h.bid(500)?;
+        assert_eq!(
+            h.auction.info.available_buy_now_price(),
+            Some(BUY_NOW_PRICE)
+        );
 
-    let outbid_reserve = h.auction.info.reserve;
-    let (buyer, nft) = h.buy_now(false)?;
+        let outbid_reserve = h.auction.info.reserve;
+        let (buyer, nft) = h.buy_now(false)?;
 
-    h.assert_unspent(h.reserve_output(
-        outbid_reserve,
-        bidder.bid.puzzle_hash,
-        bidder.reserve_amount,
-    ));
-    assert_eq!(nft.info.p2_puzzle_hash, buyer.bid.puzzle_hash);
-    h.assert_paid_out(outbid_reserve, BUY_NOW_PRICE);
+        h.assert_unspent(h.reserve_output(
+            outbid_reserve,
+            bidder.bid.puzzle_hash,
+            bidder.reserve_amount,
+        ));
+        assert_eq!(nft.info.p2_puzzle_hash, buyer.bid.puzzle_hash);
+        h.assert_paid_out(outbid_reserve, BUY_NOW_PRICE);
+    }
 
     Ok(())
 }
 
 #[test]
 fn buy_now_after_a_pending_bid_in_the_same_spend() -> Result<()> {
-    let mut h = Harness::new(with_buy_now(BUY_NOW_PRICE))?;
+    for reserve in ALL_RESERVES {
+        let mut h = Harness::new(Config {
+            reserve,
+            ..with_buy_now(BUY_NOW_PRICE)
+        })?;
 
-    let reserve_before = h.auction.info.reserve;
-    let (bidders, nft) = h.bids_then_buy_now(&[(100, false), (200, false)], false)?;
-    let buyer = bidders[2];
+        let reserve_before = h.auction.info.reserve;
+        let (bidders, nft) = h.bids_then_buy_now(&[(100, false), (200, false)], false)?;
+        let buyer = bidders[2];
 
-    assert_eq!(nft.info.p2_puzzle_hash, buyer.bid.puzzle_hash);
-    assert!(h.auction.info.state.ended);
-    assert_eq!(h.auction.info.state.winning_bid, buyer.bid);
+        assert_eq!(nft.info.p2_puzzle_hash, buyer.bid.puzzle_hash);
+        assert!(h.auction.info.state.ended);
+        assert_eq!(h.auction.info.state.winning_bid, buyer.bid);
 
-    // Every action in the spend is paid out by the same reserve coin, including the refunds of the
-    // bids that were placed before the buy now
-    for bidder in &bidders[..2] {
-        h.assert_unspent(h.reserve_output(
-            reserve_before,
-            bidder.bid.puzzle_hash,
-            bidder.reserve_amount,
-        ));
+        // Every action in the spend is paid out by the same reserve coin, including the refunds of
+        // the bids that were placed before the buy now
+        for bidder in &bidders[..2] {
+            h.assert_unspent(h.reserve_output(
+                reserve_before,
+                bidder.bid.puzzle_hash,
+                bidder.reserve_amount,
+            ));
+        }
+        h.assert_paid_out(reserve_before, BUY_NOW_PRICE);
     }
-    h.assert_paid_out(reserve_before, BUY_NOW_PRICE);
 
     Ok(())
 }
 
 #[test]
 fn bid_at_buy_now_price_skips_the_bid_verifier() -> Result<()> {
-    // The next bid after 1,000 must be at least 1,100, so the buy now price is only reachable
-    // because it skips the verifier
-    for buy_now_price in [1_050, 100] {
-        let mut h = Harness::new(with_buy_now(buy_now_price))?;
+    // With either verifier, the next bid after 1,000 must be at least 1,100, so the buy now price of
+    // 1,050 is only reachable because it skips the verifier
+    for bid_verifier in [
+        BidVerifier::Flat {
+            minimum_bid: 100,
+            bid_increment: 100,
+        },
+        BidVerifier::Percent {
+            minimum_bid: 100,
+            bid_increment_bps: 1_000,
+        },
+    ] {
+        let mut h = Harness::new(Config {
+            bid_verifier,
+            ..with_buy_now(1_050)
+        })?;
 
-        if buy_now_price > 1_000 {
-            h.bid(1_000)?;
-            assert_fails_with(h.bid(1_050 - 1), "raise");
-        }
+        h.bid(1_000)?;
+        assert_fails_with(h.bid(1_049), "raise");
 
         let (buyer, _) = h.buy_now(false)?;
-        assert_eq!(buyer.bid.amount, buy_now_price);
+        assert_eq!(buyer.bid.amount, 1_050);
     }
+
+    Ok(())
+}
+
+#[test]
+fn buy_now_price_can_equal_the_minimum_bid() -> Result<()> {
+    let mut h = Harness::new(with_buy_now(100))?;
+
+    // The only bid that can be placed is the buy now
+    assert_fails_with(h.bid(101), "raise");
+    let (buyer, _) = h.buy_now(false)?;
+    assert_eq!(buyer.bid.amount, 100);
 
     Ok(())
 }
@@ -179,6 +226,7 @@ fn bid_at_buy_now_price_can_be_ended_by_anyone() -> Result<()> {
     h.set_time(10)?;
     let winner = h.bid(BUY_NOW_PRICE)?;
     assert_eq!(h.auction.info.available_buy_now_price(), None);
+    assert_buy_now_unavailable(&mut h);
 
     let settled_reserve = h.auction.info.reserve;
     let nft = h.end()?;
@@ -228,12 +276,7 @@ fn end_waits_for_the_end_time_without_a_buy_now_price() -> Result<()> {
     h.set_time(END_TIME - 1)?;
     assert_fails_with(h.end(), "AssertSecondsAbsoluteFailed");
 
-    let nft = h.nft;
-    let result = h
-        .auction
-        .spend_buy_now_actions(&mut h.ctx, h.seller.puzzle_hash, false, &nft);
-    assert!(result.is_err());
-    h.ctx.take();
+    assert_buy_now_unavailable(&mut h);
 
     h.set_time(END_TIME)?;
     let _ = h.end()?;
@@ -273,32 +316,9 @@ fn seller_can_cancel_before_a_buy_now() -> Result<()> {
     let nft = h.cancel()?;
     assert_eq!(nft.info.p2_puzzle_hash, h.seller.puzzle_hash);
     assert_eq!(h.auction.info.available_buy_now_price(), None);
-    assert_fails_with(h.buy_now(false), "can't be bought now");
+    assert_buy_now_unavailable(&mut h);
 
     Ok(())
-}
-
-#[test]
-fn rejects_invalid_buy_now_prices() {
-    for (buy_now_price, expected) in [(0, "greater than 0"), (99, "below the minimum bid")] {
-        match Harness::new(with_buy_now(buy_now_price)) {
-            Ok(_) => panic!("expected a buy now price of {buy_now_price} to be rejected"),
-            Err(error) => {
-                let error = error
-                    .downcast::<AuctionError>()
-                    .expect("expected an auction error");
-                assert!(
-                    matches!(
-                        error,
-                        AuctionError::ZeroBuyNowPrice
-                            | AuctionError::BuyNowPriceBelowMinimumBid { .. }
-                    ),
-                    "{error}"
-                );
-                assert!(error.to_string().contains(expected), "{error}");
-            }
-        }
-    }
 }
 
 #[test]
