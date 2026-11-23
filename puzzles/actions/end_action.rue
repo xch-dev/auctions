@@ -15,6 +15,8 @@ fn main(
     TIMINGS: Timings,
     PAYMENTS: Payments,
     ROYALTY_BPS: Int,
+    // The price at which a bid wins the auction outright, or 0 if there's no buy now price
+    BUY_NOW_PRICE: Int,
     // The inner puzzle hash of the settlement coin, which is wrapped by the CAT layer for CAT reserves
     SETTLEMENT_PAYMENT_HASH: Bytes32,
     NFT_COIN_ID: Bytes32,
@@ -30,6 +32,11 @@ fn main(
     let royalty = calculate_bps_amount(bid_amount, ROYALTY_BPS);
     let payout = bid_amount - commission;
     let unlock_conditions = UNLOCKER(Truth.state.winning_bid, ...unlocker_solution);
+
+    // The bid action never allows a bid above the buy now price, so a winning bid at the buy now
+    // price can't be outbid, and the auction can be ended without waiting for it to be over. With no
+    // buy now price, the winning bid amount is 0 if there are no bids, so it must be checked first.
+    let bought_now = (BUY_NOW_PRICE > 0) & (bid_amount == BUY_NOW_PRICE);
 
     Output {
         new_truth: AuctionStateTruth {
@@ -101,17 +108,22 @@ fn main(
                 message: tree_hash((1, unlock_conditions)),
             },
 
-            // We always need to make sure the auction is over
-            AssertSecondsAbsolute { seconds: TIMINGS.end_time },
-
             // Announce the end of the auction
             CreateCoinAnnouncement { message: "$" },
 
-            // If there is a grace period, we need to make sure it's over too
-            ...inline if TIMINGS.grace_period > 0 {
-                [AssertSecondsRelative { seconds: TIMINGS.grace_period }]
-            } else {
+            // Unless the auction was bought now, we need to make sure it's over, including the grace
+            // period if there is one
+            ...inline if bought_now {
                 nil
+            } else {
+                [
+                    AssertSecondsAbsolute { seconds: TIMINGS.end_time },
+                    ...inline if TIMINGS.grace_period > 0 {
+                        [AssertSecondsRelative { seconds: TIMINGS.grace_period }]
+                    } else {
+                        nil
+                    },
+                ]
             },
         ],
     }

@@ -63,6 +63,16 @@ pub struct AuctionSettings {
     pub bid_verifier: BidVerifier,
     pub timings: Timings,
     pub payments: Payments,
+    /// The price at which a bid wins the auction outright and ends it right away, if any. No bid can
+    /// exceed it. It must be at least the minimum bid, and can't be `Some(0)`.
+    pub buy_now_price: Option<u64>,
+}
+
+impl AuctionSettings {
+    /// The buy now price as it's curried into the bid and end actions, where 0 means there isn't one.
+    pub(crate) fn buy_now_price_arg(&self) -> u64 {
+        self.buy_now_price.unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ToClvm, FromClvm)]

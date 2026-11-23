@@ -110,6 +110,23 @@ pub(crate) fn validate_auction(info: &AuctionInfo) -> Result<(), AuctionError> {
         return Err(AuctionError::ZeroBidIncrement);
     }
 
+    if let Some(buy_now_price) = info.settings.buy_now_price {
+        // The buy now price is curried in as 0 when there isn't one, and the memo can't tell
+        // `Some(0)` apart from `None`
+        if buy_now_price == 0 {
+            return Err(AuctionError::ZeroBuyNowPrice);
+        }
+
+        // A bid at the buy now price skips the bid verifier, so a lower price would undercut the
+        // minimum bid. It would also be the only bid that could ever be placed.
+        if buy_now_price < minimum_bid {
+            return Err(AuctionError::BuyNowPriceBelowMinimumBid {
+                buy_now_price,
+                minimum_bid,
+            });
+        }
+    }
+
     let payments = info.settings.payments;
 
     for (name, bps) in [

@@ -9,6 +9,8 @@ pub struct BidActionArgs<V = NodePtr> {
     pub timings: Timings,
     pub buyers_premium_bps: u64,
     pub royalty_bps: u64,
+    /// The price at which a bid wins the auction outright, or 0 if there's no buy now price.
+    pub buy_now_price: u64,
 }
 
 impl<V> BidActionArgs<V> {
@@ -17,12 +19,14 @@ impl<V> BidActionArgs<V> {
         timings: Timings,
         buyers_premium_bps: u64,
         royalty_bps: u64,
+        buy_now_price: u64,
     ) -> Self {
         Self {
             bid_verifier,
             timings,
             buyers_premium_bps,
             royalty_bps,
+            buy_now_price,
         }
     }
 }

@@ -12,6 +12,8 @@ The life cycle of an auction is as follows:
 2. Until the auction is ended, anyone can place a bid as long as their bid is strictly higher than the current winning bid and meets certain requirements which can be specified by the auctioneer. The bidder locks up their bid plus the buyer's premium and NFT royalty, and the previous bidder is refunded everything they locked up. Multiple bids can be placed in a single spend.
 3. When the auction is ended, the NFT is sent to the highest bidder, the auctioneer receives the final bid amount minus the commission, and the buyer's premium, commission, and NFT royalty are paid out. If there were no bids, the NFT is sent back to the auctioneer. An auction can only be ended once, and no bids can be placed after it's ended.
 
+If the auction has a buy now price, a bid at exactly that price wins outright, and the auction can be ended right away instead of at the end time (see [Buy Now](#buy-now)).
+
 Until the first bid is placed, the auctioneer can also cancel the auction at any time, which sends the NFT back to them just like ending it with no bids. Once there's a bid, the auctioneer is committed and the auction can only be ended. A cancelled auction is ended, so it can't be bid on, ended, or cancelled again.
 
 ## Customization
@@ -22,6 +24,7 @@ The following parameters can be customized by the auctioneer:
 - The minimum bid increment (flat or percentage)
 - The minimum amount of time before the auction is ended
 - The grace period after a bid is placed before the auction is ended
+- An optional buy now price
 
 These can also be customized, but they may be enforced to be certain values by the auction house and/or wallet, to ensure that they get a cut:
 
@@ -31,6 +34,20 @@ These can also be customized, but they may be enforced to be certain values by t
 The auctioneer can cancel the auction before the first bid, regardless of these settings. The cancel is authorized by the payout address, so whoever controls it can cancel.
 
 Both the buyer's premium and commission are percentages, and are sent to a single address. If these need to be split between multiple addresses, you should use something external to do so such as the [royalty split](https://splitxch.com/) primitive.
+
+## Buy Now
+
+An auction can have a buy now price (`AuctionSettings::buy_now_price`). It's curried into the bid and end actions, where 0 means there isn't one, so it can't be changed once the auction is launched. With a buy now price:
+
+- No bid can exceed it.
+- A bid at exactly the buy now price skips the bid verifier, so the increment can't make it unreachable once there's a bid close to it. It must still be strictly higher than the winning bid, and placed before the end time (or within the grace period). So the auction can be bought until it's ended, and while the winning bid is below the buy now price.
+- If the winning bid is at the buy now price, the end action skips the end time and grace period checks, since it can never be outbid. Otherwise the auction ends as usual.
+
+To buy now, a wallet places a bid at the buy now price and ends the auction in the same spend. `AuctionExt::spend_buy_now_actions` builds both actions and unlocks the NFT to the buyer. The buyer funds and asserts the bid like any other bid, and the previous winning bid is refunded in the same spend. `AuctionInfo::available_buy_now_price` returns the price while the auction can still be bought. If a bid at the buy now price is placed on its own instead, anyone can end the auction right after it.
+
+Buying is a bid, so it competes with pending bids in the same way (see [Competing Bids](#competing-bids)). A buyer can add their buy now after a pending bid in the same spend, which refunds the pending bidder. A pending buy now can't be outbid like this, since no bid can come after it, so the first buy now to reach the mempool wins unless a conflicting spend confirms first.
+
+The auctioneer can still cancel an auction with a buy now price before the first bid.
 
 ## Cancelling
 
@@ -67,6 +84,7 @@ The reserve finalizer takes the reserve coin's parent from the singleton's solut
 The puzzles can't prevent every misconfiguration on their own, so `AuctionLaunch::into_auction` rejects invalid auctions. `launch_auction` runs the same checks, but not the ones that are left to wallets below, so sellers are responsible for locking the NFT and reserve correctly:
 
 - The minimum bid and bid increment must be greater than 0.
+- The buy now price, if there is one, must be greater than 0 and at least the minimum bid. Since a bid at the buy now price skips the bid verifier, a lower price would undercut the minimum bid.
 - The buyer's premium, commission, and NFT royalty can't exceed 10,000 basis points.
 - Addresses that receive a payment must be unique, and can't be the settlement payments puzzle or the auction's own lock address. Addresses that aren't paid (with 0 basis points) are ignored.
 

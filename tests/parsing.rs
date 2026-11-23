@@ -185,5 +185,13 @@ fn rejects_invalid_auctions() -> Result<()> {
         Err(AuctionError::DuplicatePaymentPuzzleHash(_))
     ));
 
+    let result = parse_modified(&mut h, |solution| {
+        solution.key_value_list.settings.buy_now_price = Some(99);
+    });
+    assert!(matches!(
+        result,
+        Err(AuctionError::BuyNowPriceBelowMinimumBid { .. })
+    ));
+
     Ok(())
 }
